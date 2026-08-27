@@ -7,10 +7,10 @@ import {
 import { OwnedItemNotFoundError } from "../db/ownership";
 import { InvalidDocumentFormError } from "../documents/repository";
 import {
-  DocumentUploadPolicyError,
   ObjectStorageConfigurationError,
   ObjectStorageOperationError,
-} from "../documents/storage-errors";
+} from "../documents/storage";
+import { DocumentUploadPolicyError } from "../documents/upload-policy";
 
 export type ApiErrorCode =
   | "UNAUTHORIZED"
