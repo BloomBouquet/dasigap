@@ -194,10 +194,10 @@ a {
   font-weight: 600;
 }
 
-.field input {
+.field input,
+.field textarea {
   width: 100%;
   min-width: 0;
-  height: 48px;
   padding: 0 13px;
   border: 1px solid #d7dcd6;
   border-radius: 13px;
@@ -207,7 +207,19 @@ a {
   transition: border 120ms ease, box-shadow 120ms ease, background 120ms ease;
 }
 
-.field input:focus {
+.field input {
+  height: 48px;
+}
+
+.field textarea {
+  min-height: 110px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  resize: vertical;
+}
+
+.field input:focus,
+.field textarea:focus {
   border-color: var(--brand);
   background: #fff;
   box-shadow: 0 0 0 3px rgba(39, 92, 70, 0.12);
@@ -425,6 +437,150 @@ a {
   width: 56%;
 }
 
+.resale-page,
+.resale-stepper,
+.resale-step,
+.resale-copy-card {
+  min-width: 0;
+}
+
+.resale-stepper {
+  display: grid;
+  gap: 14px;
+}
+
+.resale-progress {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.resale-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.resale-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand);
+  transition: width 160ms ease;
+}
+
+.resale-step,
+.resale-copy-card {
+  display: grid;
+  gap: 18px;
+}
+
+.resale-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.resale-choice,
+.resale-check-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #fbfcfa;
+  cursor: pointer;
+}
+
+.resale-choice {
+  min-height: 48px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.resale-choice input,
+.resale-check-row input {
+  flex: 0 0 auto;
+  accent-color: var(--brand);
+}
+
+.resale-component-list,
+.resale-checklist {
+  display: grid;
+  gap: 8px;
+}
+
+.resale-check-row {
+  min-height: 46px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.resale-copy-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+.resale-copy-card h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.generated-copy {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  overflow-wrap: anywhere;
+}
+
+.generated-copy p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.generated-copy p + p {
+  margin-top: 4px;
+}
+
+.resale-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 9px;
+}
+
+.secondary-button {
+  display: inline-flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.subtle-text,
+.legal-copy {
+  overflow-wrap: anywhere;
+}
+
 @keyframes loading {
   to {
     background-position: -200% 0;
@@ -450,5 +606,10 @@ a {
     min-height: 42px;
     padding: 0 12px;
     font-size: 12px;
+  }
+
+  .resale-choice-grid,
+  .resale-actions {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
