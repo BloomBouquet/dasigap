@@ -6,3 +6,118 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+enum ItemStatus {
+  PURCHASED
+  RETURNABLE
+  OWNED
+  SELL_PREPARING
+  LISTED_EXTERNALLY
+  SOLD
+}
+
+enum Currency {
+  KRW
+}
+
+enum DocumentType {
+  RECEIPT
+  WARRANTY
+  OTHER
+}
+
+enum WarrantySource {
+  USER_INPUT
+}
+
+enum MaintenanceType {
+  REPAIR
+  REPLACEMENT
+  DAMAGE
+  CONDITION
+  NOTE
+}
+
+model Item {
+  id               String              @id @default(uuid()) @db.Uuid
+  userId           String
+  name             String
+  category         String
+  brand            String?
+  modelName        String?
+  purchaseDate     DateTime            @db.Date
+  purchasePrice    Int
+  currency         Currency            @default(KRW)
+  storeName        String?
+  status           ItemStatus          @default(PURCHASED)
+  coverImageKey    String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  documents        Document[]
+  warrantyRecords  WarrantyRecord[]
+  components       Component[]
+  maintenance      MaintenanceRecord[]
+  resaleDraft      ResaleDraft?
+  saleRecord       SaleRecord?
+
+  @@index([userId])
+  @@index([status])
+  @@index([purchaseDate])
+}
+
+model Document {
+  id         String       @id @default(uuid()) @db.Uuid
+  itemId     String       @db.Uuid
+  type       DocumentType
+  storageKey String
+  createdAt  DateTime     @default(now())
+  item       Item         @relation(fields: [itemId], references: [id], onDelete: Cascade)
+}
+
+model WarrantyRecord {
+  id       String         @id @default(uuid()) @db.Uuid
+  itemId   String         @db.Uuid
+  startsAt DateTime       @db.Date
+  endsAt   DateTime?      @db.Date
+  source   WarrantySource @default(USER_INPUT)
+  note     String?
+  item     Item           @relation(fields: [itemId], references: [id], onDelete: Cascade)
+}
+
+model Component {
+  id        String  @id @default(uuid()) @db.Uuid
+  itemId    String  @db.Uuid
+  name      String
+  isPresent Boolean @default(true)
+  item      Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+}
+
+model MaintenanceRecord {
+  id         String          @id @default(uuid()) @db.Uuid
+  itemId     String          @db.Uuid
+  type       MaintenanceType
+  occurredAt DateTime        @db.Date
+  note       String?
+  item       Item            @relation(fields: [itemId], references: [id], onDelete: Cascade)
+}
+
+model ResaleDraft {
+  id             String   @id @default(uuid()) @db.Uuid
+  itemId         String   @unique @db.Uuid
+  conditionGrade String
+  defectNote     String?
+  askingPrice    Int?
+  generatedText String   @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  item           Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+}
+
+model SaleRecord {
+  id        String   @id @default(uuid()) @db.Uuid
+  itemId    String   @unique @db.Uuid
+  soldAt    DateTime @db.Date
+  soldPrice Int
+  channel   String?
+  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+}
