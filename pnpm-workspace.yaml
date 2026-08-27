@@ -1,8 +1,8 @@
 packages:
   - "."
 
-onlyBuiltDependencies:
-  - "@prisma/client"
-  - "@prisma/engines"
-  - "prisma"
-  - "unrs-resolver"
+allowBuilds:
+  "@prisma/client": true
+  "@prisma/engines": true
+  "prisma": true
+  "unrs-resolver": true
