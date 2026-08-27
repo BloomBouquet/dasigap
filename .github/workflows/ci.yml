@@ -8,7 +8,7 @@ on:
       - "dasigap/**"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
@@ -39,23 +39,17 @@ jobs:
         run: |
           corepack enable
           corepack prepare pnpm@11.24.0 --activate
-      - name: Refresh dependencies
-        run: pnpm install --no-frozen-lockfile
-      - name: Persist refreshed lockfile
-        if: github.event_name == 'push' && github.ref == 'refs/heads/dasigap/database'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pnpm-lock.yaml
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: refresh pnpm lockfile"
-            git push
-          fi
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
         run: pnpm db:generate
+      - name: Validate Prisma schema
+        run: pnpm prisma validate
+      - name: Apply database migrations
+        run: pnpm prisma migrate deploy
       - name: Typecheck
         run: pnpm typecheck
-      - name: Unit tests
+      - name: Unit and integration tests
         run: pnpm test
       - name: Build
         run: pnpm build
