@@ -5,6 +5,12 @@ import {
   AuthenticationError,
 } from "../auth/server-auth";
 import { OwnedItemNotFoundError } from "../db/ownership";
+import { InvalidDocumentFormError } from "../documents/repository";
+import {
+  ObjectStorageConfigurationError,
+  ObjectStorageOperationError,
+} from "../documents/storage";
+import { DocumentUploadPolicyError } from "../documents/upload-policy";
 
 export type ApiErrorCode =
   | "UNAUTHORIZED"
@@ -90,7 +96,15 @@ export function toApiErrorResponse(error: unknown): Response {
     });
   }
 
-  if (error instanceof AuthConfigurationError) {
+  if (error instanceof InvalidDocumentFormError || error instanceof DocumentUploadPolicyError) {
+    return jsonError(400, "VALIDATION_ERROR", error.message);
+  }
+
+  if (
+    error instanceof AuthConfigurationError ||
+    error instanceof ObjectStorageConfigurationError ||
+    error instanceof ObjectStorageOperationError
+  ) {
     return jsonError(500, "INTERNAL_ERROR", "Server configuration error");
   }
 
