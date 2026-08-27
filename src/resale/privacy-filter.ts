@@ -6,6 +6,7 @@ export type ResaleTemplateInput = {
   purchaseYearMonth: string;
   approximateUsePeriod: string;
   conditionLabel: string;
+  conditionNote?: string;
   componentSummary: string;
   hasRepairHistory: boolean;
   hasPurchaseProof: boolean;
@@ -23,6 +24,7 @@ type ResaleTemplateSource = {
   documents: Array<{ type: string }>;
   draft: {
     conditionGrade: string;
+    defectNote?: string | null;
     askingPrice?: number | null;
   };
   now?: Date;
@@ -53,6 +55,7 @@ export function buildResaleTemplateInput(source: ResaleTemplateSource): ResaleTe
   const now = source.now ?? new Date();
   const totalComponents = source.components.length;
   const presentComponents = source.components.filter((component) => component.isPresent).length;
+  const conditionNote = source.draft.defectNote?.trim();
 
   return {
     productName: source.item.name,
@@ -60,6 +63,7 @@ export function buildResaleTemplateInput(source: ResaleTemplateSource): ResaleTe
     purchaseYearMonth: formatYearMonth(source.item.purchaseDate),
     approximateUsePeriod: approximateUsePeriod(source.item.purchaseDate, now),
     conditionLabel: CONDITION_LABELS[source.draft.conditionGrade] ?? "확인 필요",
+    ...(conditionNote ? { conditionNote } : {}),
     componentSummary: `${presentComponents}/${totalComponents}`,
     hasRepairHistory: source.maintenance.some((record) =>
       record.type === "REPAIR" || record.type === "REPLACEMENT",
