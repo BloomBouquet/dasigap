@@ -55,3 +55,5 @@ jobs:
         run: pnpm build
       - name: First item E2E
         run: pnpm test:e2e -- tests/e2e/first-item.spec.ts
+      - name: Receipt privacy E2E
+        run: pnpm test:e2e -- tests/e2e/receipt-privacy.spec.ts
