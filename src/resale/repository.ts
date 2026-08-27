@@ -130,6 +130,7 @@ export async function saveOwnedResaleDraft(
         documents: item.documents,
         draft: {
           conditionGrade: merged.conditionGrade,
+          defectNote: merged.defectNote,
           askingPrice: merged.askingPrice,
         },
       }),
