@@ -27,6 +27,9 @@ export default defineConfig({
       DATABASE_URL:
         process.env.DATABASE_URL ??
         "postgresql://postgres:postgres@127.0.0.1:5432/dasigap",
+      OBJECT_STORAGE_MODE: "memory",
+      OBJECT_STORAGE_SIGNED_URL_TTL_SECONDS: "300",
+      PRIVATE_DOCUMENT_BASE_URL: "http://127.0.0.1:3000",
     },
   },
 });
