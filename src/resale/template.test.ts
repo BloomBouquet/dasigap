@@ -41,6 +41,7 @@ describe("privacy-safe resale template", () => {
       ],
       draft: {
         conditionGrade: "GOOD",
+        defectNote: "케이스에 작은 생활 흠집",
         askingPrice: 170000,
       },
       now: new Date("2026-08-15T00:00:00.000Z"),
@@ -53,6 +54,7 @@ describe("privacy-safe resale template", () => {
     expect(text).toContain("2026년 1월");
     expect(text).toContain("약 7개월");
     expect(text).toContain("상태: 좋음");
+    expect(text).toContain("상태 메모: 케이스에 작은 생활 흠집");
     expect(text).toContain("구성품: 2/3");
     expect(text).toContain("수리 이력: 있음");
     expect(text).toContain("구매 증빙: 있음");
@@ -63,7 +65,7 @@ describe("privacy-safe resale template", () => {
     }
   });
 
-  it("omits optional model and asking price instead of inventing data", () => {
+  it("omits optional model, condition note, and asking price instead of inventing data", () => {
     const text = generateResaleText({
       productName: "키보드",
       purchaseYearMonth: "2026년 6월",
@@ -78,6 +80,7 @@ describe("privacy-safe resale template", () => {
     expect(text).toContain("수리 이력: 없음");
     expect(text).toContain("구매 증빙: 없음");
     expect(text).not.toContain("모델:");
+    expect(text).not.toContain("상태 메모:");
     expect(text).not.toContain("희망 가격:");
   });
 });
