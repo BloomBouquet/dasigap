@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { DELETE as DELETE_DOCUMENT } from "../../app/api/documents/[id]/route";
 import { GET as GET_SIGNED_URL } from "../../app/api/documents/[id]/signed-url/route";
 import { POST as POST_DOCUMENT } from "../../app/api/items/[id]/documents/route";
+import { DELETE as DELETE_ITEM } from "../../app/api/items/[id]/route";
 import { prisma } from "../../src/db/prisma";
 import { readPrivateObjectForTest } from "../../src/documents/storage";
 
@@ -123,6 +124,28 @@ describe("private document storage", () => {
     );
     expect(response.status).toBe(204);
     await expect(prisma.document.findUnique({ where: { id: document.id } })).resolves.toBeNull();
+    await expect(readPrivateObjectForTest(stored.storageKey)).resolves.toBeNull();
+  });
+
+  it("removes private objects when deleting an owned item", async () => {
+    const item = await createItem();
+    const upload = await POST_DOCUMENT(
+      request(`http://localhost/api/items/${item.id}/documents`, {
+        method: "POST",
+        body: receiptForm("item-delete-receipt.pdf"),
+      }),
+      context(item.id),
+    );
+    const { document } = await upload.json();
+    const stored = await prisma.document.findUniqueOrThrow({ where: { id: document.id } });
+
+    const response = await DELETE_ITEM(
+      request(`http://localhost/api/items/${item.id}`, { method: "DELETE" }),
+      context(item.id),
+    );
+
+    expect(response.status).toBe(204);
+    await expect(prisma.item.findUnique({ where: { id: item.id } })).resolves.toBeNull();
     await expect(readPrivateObjectForTest(stored.storageKey)).resolves.toBeNull();
   });
 
