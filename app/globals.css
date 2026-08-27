@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=Pretendard:wght@400;500;600;700;800&display=swap");
-
 :root {
   --bg: #f6f5f1;
   --surface: #ffffff;
@@ -29,7 +27,7 @@ body {
   overflow-x: hidden;
   background: var(--bg);
   color: var(--text);
-  font-family: Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  font-family: "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
 }
 
 button,
