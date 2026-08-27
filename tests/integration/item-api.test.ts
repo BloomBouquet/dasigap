@@ -5,11 +5,14 @@ import { DELETE, GET as GET_ITEM, PATCH } from "../../app/api/items/[id]/route";
 import { GET, POST } from "../../app/api/items/route";
 
 const DEV_USER_HEADER = "x-dasigap-dev-user";
+const API_USER_A = "api-user-a";
+const API_USER_B = "api-user-b";
+const API_USERS = [API_USER_A, API_USER_B];
 
 function request(
   url: string,
   init: RequestInit = {},
-  userId: string | null = "user-a",
+  userId: string | null = API_USER_A,
 ) {
   const headers = new Headers(init.headers);
 
@@ -42,7 +45,9 @@ describe("item CRUD API", () => {
   beforeEach(async () => {
     vi.stubEnv("AUTH_MODE", "dev");
     vi.stubEnv("NODE_ENV", "test");
-    await prisma.item.deleteMany();
+    await prisma.item.deleteMany({
+      where: { userId: { in: API_USERS } },
+    });
   });
 
   afterEach(() => {
@@ -50,6 +55,9 @@ describe("item CRUD API", () => {
   });
 
   afterAll(async () => {
+    await prisma.item.deleteMany({
+      where: { userId: { in: API_USERS } },
+    });
     await prisma.$disconnect();
   });
 
@@ -65,13 +73,13 @@ describe("item CRUD API", () => {
     const created = await createdResponse.json();
     expect(created.item).toMatchObject({
       name: "AirPods Pro",
-      userId: "user-a",
+      userId: API_USER_A,
       purchasePrice: 249000,
     });
 
     await prisma.item.create({
       data: {
-        userId: "user-b",
+        userId: API_USER_B,
         name: "Private item",
         category: "Other",
         purchaseDate: new Date("2026-08-20T00:00:00.000Z"),
@@ -89,7 +97,7 @@ describe("item CRUD API", () => {
   it("gets, patches, and deletes an owned item", async () => {
     const item = await prisma.item.create({
       data: {
-        userId: "user-a",
+        userId: API_USER_A,
         name: "Old name",
         category: "Audio",
         purchaseDate: new Date("2026-08-20T00:00:00.000Z"),
@@ -149,7 +157,7 @@ describe("item CRUD API", () => {
   it("returns the same 404 envelope for cross-user and missing item access", async () => {
     const item = await prisma.item.create({
       data: {
-        userId: "user-a",
+        userId: API_USER_A,
         name: "Private item",
         category: "Audio",
         purchaseDate: new Date("2026-08-20T00:00:00.000Z"),
@@ -158,14 +166,14 @@ describe("item CRUD API", () => {
     });
 
     const crossUser = await GET_ITEM(
-      request(`http://localhost/api/items/${item.id}`, {}, "user-b"),
+      request(`http://localhost/api/items/${item.id}`, {}, API_USER_B),
       itemContext(item.id),
     );
     const missing = await GET_ITEM(
       request(
         "http://localhost/api/items/00000000-0000-4000-8000-000000000999",
         {},
-        "user-b",
+        API_USER_B,
       ),
       itemContext("00000000-0000-4000-8000-000000000999"),
     );
