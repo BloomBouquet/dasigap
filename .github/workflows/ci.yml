@@ -14,6 +14,20 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dasigap
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dasigap"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/dasigap
     steps:
@@ -29,9 +43,13 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
         run: pnpm db:generate
+      - name: Validate Prisma schema
+        run: pnpm prisma validate
+      - name: Apply database migrations
+        run: pnpm prisma migrate deploy
       - name: Typecheck
         run: pnpm typecheck
-      - name: Unit tests
+      - name: Unit and integration tests
         run: pnpm test
       - name: Build
         run: pnpm build
