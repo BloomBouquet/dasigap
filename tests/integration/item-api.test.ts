@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { prisma } from "../../src/db/prisma";
 import { DELETE, GET as GET_ITEM, PATCH } from "../../app/api/items/[id]/route";
@@ -34,15 +34,19 @@ const validItem = {
   purchaseDate: "2026-08-20",
 };
 
-async function itemContext(id: string) {
+function itemContext(id: string) {
   return { params: Promise.resolve({ id }) };
 }
 
 describe("item CRUD API", () => {
   beforeEach(async () => {
-    process.env.AUTH_MODE = "dev";
-    process.env.NODE_ENV = "test";
+    vi.stubEnv("AUTH_MODE", "dev");
+    vi.stubEnv("NODE_ENV", "test");
     await prisma.item.deleteMany();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   afterAll(async () => {
@@ -95,7 +99,7 @@ describe("item CRUD API", () => {
 
     const getResponse = await GET_ITEM(
       request(`http://localhost/api/items/${item.id}`),
-      await itemContext(item.id),
+      itemContext(item.id),
     );
     expect(getResponse.status).toBe(200);
     await expect(getResponse.json()).resolves.toMatchObject({
@@ -107,7 +111,7 @@ describe("item CRUD API", () => {
         method: "PATCH",
         body: JSON.stringify({ name: "New name" }),
       }),
-      await itemContext(item.id),
+      itemContext(item.id),
     );
     expect(patchResponse.status).toBe(200);
     await expect(patchResponse.json()).resolves.toMatchObject({
@@ -116,7 +120,7 @@ describe("item CRUD API", () => {
 
     const deleteResponse = await DELETE(
       request(`http://localhost/api/items/${item.id}`, { method: "DELETE" }),
-      await itemContext(item.id),
+      itemContext(item.id),
     );
     expect(deleteResponse.status).toBe(204);
     await expect(prisma.item.findUnique({ where: { id: item.id } })).resolves.toBeNull();
@@ -155,7 +159,7 @@ describe("item CRUD API", () => {
 
     const crossUser = await GET_ITEM(
       request(`http://localhost/api/items/${item.id}`, {}, "user-b"),
-      await itemContext(item.id),
+      itemContext(item.id),
     );
     const missing = await GET_ITEM(
       request(
@@ -163,7 +167,7 @@ describe("item CRUD API", () => {
         {},
         "user-b",
       ),
-      await itemContext("00000000-0000-4000-8000-000000000999"),
+      itemContext("00000000-0000-4000-8000-000000000999"),
     );
 
     expect(crossUser.status).toBe(404);
