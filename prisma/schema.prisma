@@ -49,6 +49,7 @@ model Item {
   purchasePrice    Int
   currency         Currency            @default(KRW)
   storeName        String?
+  returnDeadline   DateTime?           @db.Date
   status           ItemStatus          @default(PURCHASED)
   coverImageKey    String?
   createdAt        DateTime            @default(now())
