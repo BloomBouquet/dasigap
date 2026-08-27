@@ -32,6 +32,7 @@ export class ObjectStorageOperationError extends Error {
 }
 
 function useMemoryStorage() {
+  if (process.env.NODE_ENV === "production") return false;
   return process.env.OBJECT_STORAGE_MODE === "memory" || process.env.NODE_ENV === "test";
 }
 
