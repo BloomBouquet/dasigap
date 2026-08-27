@@ -108,6 +108,7 @@ model ResaleDraft {
   conditionGrade String
   defectNote     String?
   askingPrice    Int?
+  photoChecklist Json?
   generatedText String   @db.Text
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
