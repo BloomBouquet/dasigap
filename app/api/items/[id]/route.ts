@@ -1,7 +1,7 @@
 import { requireUser } from "../../../../src/auth/server-auth";
 import { throwOwnedItemNotFound } from "../../../../src/db/ownership";
+import { deleteOwnedItemAndPrivateDocuments } from "../../../../src/documents/repository";
 import {
-  deleteOwnedItem,
   getOwnedItem,
   updateOwnedItem,
 } from "../../../../src/items/repository";
@@ -72,7 +72,7 @@ export async function DELETE(
   try {
     const user = await requireUser(request);
     const itemId = await ownedItemId(context);
-    await deleteOwnedItem(user.userId, itemId);
+    await deleteOwnedItemAndPrivateDocuments(user.userId, itemId);
 
     return new Response(null, { status: 204 });
   } catch (error) {
