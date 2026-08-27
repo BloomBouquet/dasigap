@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { throwOwnedItemNotFound } from "../db/ownership";
 import { prisma } from "../db/prisma";
-import { getOwnedItem } from "../items/repository";
+import { deleteOwnedItem, getOwnedItem } from "../items/repository";
 import {
   createSignedReadUrl,
   deletePrivateObject,
@@ -125,4 +125,19 @@ export async function deleteOwnedDocument(userId: string, documentId: string) {
     where: { id: document.id, item: { userId } },
   });
   if (deleted.count !== 1) throwOwnedItemNotFound();
+}
+
+export async function deleteOwnedItemAndPrivateDocuments(userId: string, itemId: string) {
+  await getOwnedItem(userId, itemId);
+
+  const documents = await prisma.document.findMany({
+    where: { itemId },
+    select: { storageKey: true },
+  });
+
+  for (const document of documents) {
+    await deletePrivateObject(document.storageKey);
+  }
+
+  await deleteOwnedItem(userId, itemId);
 }
