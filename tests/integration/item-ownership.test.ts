@@ -10,6 +10,10 @@ import {
   updateOwnedItem,
 } from "../../src/items/repository";
 
+const OWNER_USER = "ownership-user-a";
+const OTHER_USER = "ownership-user-b";
+const OWNERSHIP_USERS = [OWNER_USER, OTHER_USER];
+
 const itemInput = {
   name: "AirPods Pro",
   category: "Audio",
@@ -33,53 +37,58 @@ async function captureNotFound(operation: () => Promise<unknown>) {
 
 describe("item repository ownership guard", () => {
   beforeEach(async () => {
-    await prisma.item.deleteMany();
+    await prisma.item.deleteMany({
+      where: { userId: { in: OWNERSHIP_USERS } },
+    });
   });
 
   afterAll(async () => {
+    await prisma.item.deleteMany({
+      where: { userId: { in: OWNERSHIP_USERS } },
+    });
     await prisma.$disconnect();
   });
 
   it("never exposes another user's item through list or read", async () => {
-    const item = await createItem("user-a", itemInput);
+    const item = await createItem(OWNER_USER, itemInput);
 
-    await expect(listItems("user-b")).resolves.toEqual([]);
+    await expect(listItems(OTHER_USER)).resolves.toEqual([]);
 
-    const crossUser = await captureNotFound(() => getOwnedItem("user-b", item.id));
+    const crossUser = await captureNotFound(() => getOwnedItem(OTHER_USER, item.id));
     const nonexistent = await captureNotFound(() =>
-      getOwnedItem("user-b", "00000000-0000-4000-8000-000000000999"),
+      getOwnedItem(OTHER_USER, "00000000-0000-4000-8000-000000000999"),
     );
 
     expect(crossUser).toEqual(nonexistent);
   });
 
   it("prevents cross-user update without revealing item existence", async () => {
-    const item = await createItem("user-a", itemInput);
+    const item = await createItem(OWNER_USER, itemInput);
 
     const crossUser = await captureNotFound(() =>
-      updateOwnedItem("user-b", item.id, { name: "Stolen update" }),
+      updateOwnedItem(OTHER_USER, item.id, { name: "Stolen update" }),
     );
     const nonexistent = await captureNotFound(() =>
-      updateOwnedItem("user-b", "00000000-0000-4000-8000-000000000999", {
+      updateOwnedItem(OTHER_USER, "00000000-0000-4000-8000-000000000999", {
         name: "Stolen update",
       }),
     );
 
     expect(crossUser).toEqual(nonexistent);
-    await expect(getOwnedItem("user-a", item.id)).resolves.toMatchObject({
+    await expect(getOwnedItem(OWNER_USER, item.id)).resolves.toMatchObject({
       name: "AirPods Pro",
     });
   });
 
   it("prevents cross-user delete without revealing item existence", async () => {
-    const item = await createItem("user-a", itemInput);
+    const item = await createItem(OWNER_USER, itemInput);
 
-    const crossUser = await captureNotFound(() => deleteOwnedItem("user-b", item.id));
+    const crossUser = await captureNotFound(() => deleteOwnedItem(OTHER_USER, item.id));
     const nonexistent = await captureNotFound(() =>
-      deleteOwnedItem("user-b", "00000000-0000-4000-8000-000000000999"),
+      deleteOwnedItem(OTHER_USER, "00000000-0000-4000-8000-000000000999"),
     );
 
     expect(crossUser).toEqual(nonexistent);
-    await expect(getOwnedItem("user-a", item.id)).resolves.toMatchObject({ id: item.id });
+    await expect(getOwnedItem(OWNER_USER, item.id)).resolves.toMatchObject({ id: item.id });
   });
 });
