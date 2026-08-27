@@ -11,6 +11,7 @@ export function generateResaleText(input: ResaleTemplateInput): string {
     `구매 시기: ${input.purchaseYearMonth}`,
     `사용 기간: ${input.approximateUsePeriod}`,
     `상태: ${input.conditionLabel}`,
+    ...(input.conditionNote ? [`상태 메모: ${input.conditionNote}`] : []),
     `구성품: ${input.componentSummary}`,
     `수리 이력: ${input.hasRepairHistory ? "있음" : "없음"}`,
     `구매 증빙: ${input.hasPurchaseProof ? "있음" : "없음"}`,
