@@ -93,11 +93,11 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 5. 서버는 같은 인증 사용자의 `ITEM_REGISTRATION_STARTED.createdAt`과 완료 서버 시각의 차이로 `durationMs` 계산
 6. 30분을 초과하거나 소유권/타입이 맞지 않으면 `durationMs = null`
 
-기존 `x-dasigap-registration-duration-ms` 헤더는 분석 신뢰값으로 사용하지 않는다.
+클라이언트가 직접 보낸 등록 소요시간 숫자는 분석 신뢰값으로 사용하지 않는다.
 
 ## 6. Visit Dedupe
 
-`AppVisitTracker`의 localStorage는 불필요한 네트워크 요청을 줄이는 최적화일 뿐 정확성 경계가 아니다.
+`AppVisitTracker`는 앱 셸이 mount되면 `APP_VISITED`를 전송한다. 클라이언트 localStorage나 사용자 기기의 날짜를 정확성 경계로 사용하지 않는다.
 
 서버가 KST 기준 날짜를 계산하고 다음 `dedupeKey`를 만든다.
 
@@ -105,7 +105,7 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 
 `ProductEvent.dedupeKey` unique constraint와 Prisma upsert를 사용해 여러 탭·브라우저·기기의 동시 요청에서도 같은 사용자/KST 하루의 `APP_VISITED`는 한 건만 유지한다.
 
-클라이언트는 날짜나 dedupe key를 지정할 수 없다.
+따라서 클라이언트의 반복 요청은 허용하며, 실제 중복 제거와 날짜 판단은 서버가 담당한다. 클라이언트는 날짜나 dedupe key를 지정할 수 없다.
 
 ## 7. Lifecycle Events
 
@@ -142,7 +142,7 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 
 사용비 리포트 데이터를 소유권 범위에서 정상 조회한 뒤 `USAGE_COST_VIEWED`를 서버가 best-effort로 기록한다.
 
-클라이언트가 이 이벤트를 직접 만들 수 없다.
+클라이언트가 이 이벤트를 직접 만들 수 없다. 이 지표의 `views`는 성공한 리포트 데이터 로드 횟수이며, 별도로 고유 사용자 수를 함께 계산한다.
 
 ## 11. Raw Event Retention
 
@@ -172,10 +172,12 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 
 ## 13. Measurement Definitions
 
+모든 전환 지표의 분자는 같은 관측창에서 해당 분모 cohort에 실제로 포함된 동일 사용자 또는 동일 item의 후속 이벤트만 인정한다. 이 규칙으로 retention 경계에서 선행 이벤트가 만료되고 후속 이벤트만 남았을 때 전환율이 부풀려지는 것을 막는다.
+
 ### First-item conversion
 
 - 분모: `ITEM_REGISTRATION_STARTED` 고유 사용자
-- 분자: `ITEM_REGISTRATION_COMPLETED` 고유 사용자
+- 분자: 위 시작 사용자 집합에 속하면서 `ITEM_REGISTRATION_COMPLETED`가 있는 고유 사용자
 
 ### Registration duration
 
@@ -183,9 +185,12 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 
 ### D7 / D30 retention
 
-- 기준일: 사용자별 첫 `APP_VISITED` KST 날짜
+- 관측창: 현재 보존된 최근 180일 raw event
+- 기준일: 관측창 안에서 사용자별 가장 이른 `APP_VISITED` KST 날짜
 - D7: 정확히 기준일 + 7 KST 날짜에 방문 이벤트가 존재하는 사용자 비율
 - D30: 정확히 기준일 + 30 KST 날짜에 방문 이벤트가 존재하는 사용자 비율
+
+따라서 이 값은 180일 관측창 안의 재방문 지표이며, 180일을 넘어선 평생 최초 가입 cohort를 영구 추적하는 지표가 아니다.
 
 ### Lifecycle usage
 
@@ -196,21 +201,21 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 ### Resale completion
 
 - 분모: `RESALE_STARTED` 고유 item
-- 분자: `RESALE_COMPLETED` 고유 item
+- 분자: 위 시작 item 집합에 속하면서 `RESALE_COMPLETED`가 있는 고유 item
 
 ### Copy usage
 
-- 분모: `RESALE_COMPLETED` 고유 item
-- 분자: `RESALE_COPY_COPIED` 고유 item
+- 분모: `RESALE_STARTED` cohort 안에서 `RESALE_COMPLETED`까지 도달한 고유 item
+- 분자: 위 완료 item 집합에 속하면서 `RESALE_COPY_COPIED`가 있는 고유 item
 
 ### Sale completion
 
 - 분모: `RESALE_STARTED` 고유 item
-- 분자: `SALE_COMPLETED` 고유 item
+- 분자: 위 시작 item 집합에 속하면서 `SALE_COMPLETED`가 있는 고유 item
 
 ### Usage-cost usage
 
-- `USAGE_COST_VIEWED` 조회 수
+- `USAGE_COST_VIEWED` 성공 조회 수
 - 고유 조회 사용자 수
 
 분모가 0이면 비율은 `0`으로 반환하고 NaN을 노출하지 않는다.
@@ -229,7 +234,7 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 - 서버 전용 이벤트 client 위조 거부
 - cross-user item 이벤트 차단
 - server start event 기반 등록 duration
-- legacy client duration 값 미신뢰
+- client가 보낸 duration 값 미신뢰
 - KST 서버 일일 방문 dedupe
 - 생애관리 성공 변경만 lifecycle event 생성
 - 판매 완료 트랜잭션과 `SALE_COMPLETED` 원자성
@@ -237,6 +242,7 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 - 판매글 clipboard 성공 시에만 copy event 전송
 - 180일 초과 raw event 자동 삭제
 - metric conversion/median/KST D7/D30/zero denominator 계산
+- 분자 이벤트가 분모 cohort 밖에 있을 때 전환율에서 제외
 - 외부 analytics SDK/package 금지
 - 기존 전체 MVP E2E 회귀
 
