@@ -3,6 +3,8 @@ import { z } from "zod";
 
 import { prisma } from "../db/prisma";
 
+const MAX_REGISTRATION_DURATION_MS = 1_800_000;
+
 const unscopedClientEventSchema = z
   .object({
     type: z.enum(["APP_VISITED", "ITEM_REGISTRATION_STARTED"]),
@@ -27,6 +29,10 @@ export const clientProductEventSchema = z.union([
 
 export type ClientProductEvent = z.infer<typeof clientProductEventSchema>;
 
+/**
+ * Legacy parser kept for backwards-compatible unit coverage only.
+ * Product registration no longer trusts this client-provided duration.
+ */
 export function parseRegistrationDuration(value: string | null): number | null {
   if (value === null || !/^\d+$/.test(value)) return null;
 
@@ -54,4 +60,26 @@ export function recordProductEvent(input: RecordProductEventInput) {
       durationMs: input.durationMs ?? null,
     },
   });
+}
+
+export async function resolveRegistrationDurationMs(
+  userId: string,
+  startEventId: string,
+  completedAt: Date,
+): Promise<number | null> {
+  const started = await prisma.productEvent.findFirst({
+    where: {
+      id: startEventId,
+      userId,
+      type: "ITEM_REGISTRATION_STARTED",
+    },
+    select: { createdAt: true },
+  });
+
+  if (!started) return null;
+
+  const durationMs = completedAt.getTime() - started.createdAt.getTime();
+  if (durationMs < 0 || durationMs > MAX_REGISTRATION_DURATION_MS) return null;
+
+  return durationMs;
 }
