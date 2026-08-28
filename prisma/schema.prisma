@@ -38,6 +38,16 @@ enum MaintenanceType {
   NOTE
 }
 
+enum ProductEventType {
+  APP_VISITED
+  ITEM_REGISTRATION_STARTED
+  ITEM_REGISTRATION_COMPLETED
+  RESALE_STARTED
+  RESALE_COMPLETED
+  RESALE_COPY_COPIED
+  SALE_COMPLETED
+}
+
 model Item {
   id               String              @id @default(uuid()) @db.Uuid
   userId           String
@@ -122,4 +132,17 @@ model SaleRecord {
   soldPrice Int
   channel   String?
   item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+}
+
+model ProductEvent {
+  id         String           @id @default(uuid()) @db.Uuid
+  userId     String
+  itemId     String?          @db.Uuid
+  type       ProductEventType
+  durationMs Int?
+  createdAt  DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([itemId, type])
 }
