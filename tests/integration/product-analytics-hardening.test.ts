@@ -124,4 +124,25 @@ describe("product analytics hardening", () => {
     expect(events).toHaveLength(2);
     expect(events.every((event) => event.durationMs === null)).toBe(true);
   });
+
+  it("deduplicates APP_VISITED on the server for the same authenticated user and KST day", async () => {
+    const first = await POST_EVENT(eventRequest({ type: "APP_VISITED" }));
+    const second = await POST_EVENT(eventRequest({ type: "APP_VISITED" }));
+    const otherUser = await POST_EVENT(eventRequest({ type: "APP_VISITED" }, USER_B));
+
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    expect(otherUser.status).toBe(202);
+
+    expect(
+      await prisma.productEvent.count({
+        where: { userId: USER_A, type: "APP_VISITED" },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.productEvent.count({
+        where: { userId: USER_B, type: "APP_VISITED" },
+      }),
+    ).toBe(1);
+  });
 });
