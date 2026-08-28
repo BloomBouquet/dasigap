@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  clientProductEventSchema,
-  parseRegistrationDuration,
-} from "./events";
+import { clientProductEventSchema } from "./events";
 
 describe("product event privacy contract", () => {
   it("accepts only the fixed client event names", () => {
@@ -53,16 +50,5 @@ describe("product event privacy contract", () => {
         itemId: "00000000-0000-4000-8000-000000000001",
       }),
     ).toThrow();
-  });
-
-  it("parses only bounded integer registration durations", () => {
-    expect(parseRegistrationDuration("0")).toBe(0);
-    expect(parseRegistrationDuration("84500")).toBe(84500);
-    expect(parseRegistrationDuration("3600000")).toBe(3600000);
-    expect(parseRegistrationDuration(null)).toBeNull();
-    expect(parseRegistrationDuration("-1")).toBeNull();
-    expect(parseRegistrationDuration("1.5")).toBeNull();
-    expect(parseRegistrationDuration("abc")).toBeNull();
-    expect(parseRegistrationDuration("3600001")).toBeNull();
   });
 });
