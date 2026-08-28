@@ -1,7 +1,9 @@
 import { requireUser } from "../../../src/auth/server-auth";
 import {
   clientProductEventSchema,
+  kstDateKey,
   recordProductEvent,
+  recordProductEventOnce,
 } from "../../../src/analytics/events";
 import { getOwnedItem } from "../../../src/items/repository";
 import {
@@ -24,6 +26,16 @@ export async function POST(request: Request): Promise<Response> {
 
     if ("itemId" in event) {
       await getOwnedItem(user.userId, event.itemId);
+    }
+
+    if (event.type === "APP_VISITED") {
+      const now = new Date();
+      await recordProductEventOnce({
+        userId: user.userId,
+        type: event.type,
+        dedupeKey: `visit:${user.userId}:${kstDateKey(now)}`,
+      });
+      return noStore(Response.json({ accepted: true }, { status: 202 }));
     }
 
     const stored = await recordProductEvent({
