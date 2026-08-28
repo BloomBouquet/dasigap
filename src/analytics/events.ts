@@ -1,9 +1,10 @@
-import type { ProductEventType } from "@prisma/client";
+import { Prisma, type ProductEventType } from "@prisma/client";
 import { z } from "zod";
 
 import { prisma } from "../db/prisma";
 
 const MAX_REGISTRATION_DURATION_MS = 1_800_000;
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 const unscopedClientEventSchema = z
   .object({
@@ -44,11 +45,16 @@ export function parseRegistrationDuration(value: string | null): number | null {
   return duration;
 }
 
+export function kstDateKey(date: Date): string {
+  return new Date(date.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
 export type RecordProductEventInput = {
   userId: string;
   itemId?: string | null;
   type: ProductEventType;
   durationMs?: number | null;
+  dedupeKey?: string | null;
 };
 
 export function recordProductEvent(input: RecordProductEventInput) {
@@ -58,8 +64,24 @@ export function recordProductEvent(input: RecordProductEventInput) {
       itemId: input.itemId ?? null,
       type: input.type,
       durationMs: input.durationMs ?? null,
+      dedupeKey: input.dedupeKey ?? null,
     },
   });
+}
+
+export async function recordProductEventOnce(input: RecordProductEventInput) {
+  if (!input.dedupeKey) {
+    return recordProductEvent(input);
+  }
+
+  try {
+    return await recordProductEvent(input);
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return null;
+    }
+    throw error;
+  }
 }
 
 export async function resolveRegistrationDurationMs(
