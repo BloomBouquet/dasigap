@@ -72,6 +72,7 @@ model Item {
   maintenance      MaintenanceRecord[]
   resaleDraft      ResaleDraft?
   saleRecord       SaleRecord?
+  productEvents    ProductEvent[]
 
   @@index([userId])
   @@index([status])
@@ -144,6 +145,7 @@ model ProductEvent {
   durationMs Int?
   dedupeKey  String?          @unique
   createdAt  DateTime         @default(now())
+  item       Item?            @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
   @@index([createdAt])
   @@index([userId, createdAt])
