@@ -30,6 +30,11 @@ export default defineConfig({
       OBJECT_STORAGE_MODE: "memory",
       OBJECT_STORAGE_SIGNED_URL_TTL_SECONDS: "300",
       PRIVATE_DOCUMENT_BASE_URL: "http://127.0.0.1:3000",
+      BOUQUET_AUTH_BASE_URL: "http://127.0.0.1:3999",
+      BOUQUET_AUTH_APP_ID: "dasigap",
+      BOUQUET_AUTH_REDIRECT_URI:
+        "http://127.0.0.1:3000/api/auth/bouquet/callback",
+      DASIGAP_POST_LOGIN_URL: "/",
     },
   },
 });
