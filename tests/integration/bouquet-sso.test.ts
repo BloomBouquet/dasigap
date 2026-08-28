@@ -23,6 +23,10 @@ function requestBody(request: import("node:http").IncomingMessage) {
   });
 }
 
+function oauthStateCookie(state: string) {
+  return { cookie: `dasigap_oauth_state=${encodeURIComponent(state)}` };
+}
+
 beforeAll(async () => {
   provider = createServer(async (request, response) => {
     if (request.url === "/api/bouquet/oauth/token" && request.method === "POST") {
@@ -86,7 +90,7 @@ afterAll(async () => {
 });
 
 describe("Bouquet SSO", () => {
-  it("starts Authorization Code + PKCE without exposing the verifier", async () => {
+  it("starts Authorization Code + PKCE and binds state to an HttpOnly browser cookie", async () => {
     const response = await start(new Request("https://dasigap.test/auth/bouquet/start?returnTo=%2Fitems"));
 
     expect(response.status).toBe(302);
@@ -101,12 +105,39 @@ describe("Bouquet SSO", () => {
     expect(location.searchParams.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(location.search).not.toContain("code_verifier");
 
+    const state = location.searchParams.get("state")!;
+    const setCookie = response.headers.get("set-cookie")!;
+    expect(setCookie).toContain(`dasigap_oauth_state=${encodeURIComponent(state)}`);
+    expect(setCookie).toContain("Path=/auth/bouquet");
+    expect(setCookie).toContain("HttpOnly");
+    expect(setCookie).toContain("SameSite=Lax");
+    expect(setCookie).toContain("Max-Age=300");
+
     expectedChallenge = location.searchParams.get("code_challenge")!;
     const flows = await prisma.bouquetAuthFlow.findMany();
     expect(flows).toHaveLength(1);
     expect(flows[0].returnTo).toBe("/items");
     expect(flows[0].codeVerifier).not.toBe("");
-    expect(flows[0].stateHash).not.toBe(location.searchParams.get("state"));
+    expect(flows[0].stateHash).not.toBe(state);
+  });
+
+  it("rejects a callback from a browser that does not own the OAuth state", async () => {
+    const startResponse = await start(new Request("https://dasigap.test/auth/bouquet/start?returnTo=%2Fitems"));
+    const authorizeUrl = new URL(startResponse.headers.get("location")!);
+    const state = authorizeUrl.searchParams.get("state")!;
+    expectedChallenge = authorizeUrl.searchParams.get("code_challenge")!;
+
+    const callbackResponse = await callback(
+      new Request(`https://dasigap.test/auth/bouquet/callback?code=one-time-code&state=${encodeURIComponent(state)}`, {
+        headers: oauthStateCookie("different-browser-state"),
+      }),
+    );
+
+    expect(callbackResponse.status).toBe(400);
+    expect(callbackResponse.headers.get("set-cookie")).toContain("dasigap_oauth_state=");
+    expect(callbackResponse.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(await prisma.bouquetAuthFlow.count()).toBe(1);
+    expect(await prisma.bouquetProjectSession.count()).toBe(0);
   });
 
   it("exchanges the one-time code server-side and creates a project HttpOnly session", async () => {
@@ -116,7 +147,9 @@ describe("Bouquet SSO", () => {
     expectedChallenge = authorizeUrl.searchParams.get("code_challenge")!;
 
     const callbackResponse = await callback(
-      new Request(`https://dasigap.test/auth/bouquet/callback?code=one-time-code&state=${encodeURIComponent(state)}`),
+      new Request(`https://dasigap.test/auth/bouquet/callback?code=one-time-code&state=${encodeURIComponent(state)}`, {
+        headers: oauthStateCookie(state),
+      }),
     );
 
     expect(callbackResponse.status).toBe(302);
@@ -125,6 +158,8 @@ describe("Bouquet SSO", () => {
     expect(setCookie).toContain("dasigap_session=");
     expect(setCookie).toContain("HttpOnly");
     expect(setCookie).toContain("SameSite=Lax");
+    expect(setCookie).toContain("dasigap_oauth_state=");
+    expect(setCookie).toContain("Max-Age=0");
     expect(setCookie).not.toContain("central-access-token");
 
     expect(await prisma.bouquetAuthFlow.count()).toBe(0);
@@ -136,7 +171,9 @@ describe("Bouquet SSO", () => {
     await expect(sessionResponse.json()).resolves.toEqual({ user: { userId: "bouquet-user-123" } });
 
     const replay = await callback(
-      new Request(`https://dasigap.test/auth/bouquet/callback?code=one-time-code&state=${encodeURIComponent(state)}`),
+      new Request(`https://dasigap.test/auth/bouquet/callback?code=one-time-code&state=${encodeURIComponent(state)}`, {
+        headers: oauthStateCookie(state),
+      }),
     );
     expect(replay.status).toBe(400);
   });
@@ -148,7 +185,9 @@ describe("Bouquet SSO", () => {
     expectedChallenge = authorizeUrl.searchParams.get("code_challenge")!;
 
     const callbackResponse = await callback(
-      new Request(`https://host-header-attacker.example/auth/bouquet/callback?code=one-time-code&state=${encodeURIComponent(state)}`),
+      new Request(`https://host-header-attacker.example/auth/bouquet/callback?code=one-time-code&state=${encodeURIComponent(state)}`, {
+        headers: oauthStateCookie(state),
+      }),
     );
 
     expect(callbackResponse.status).toBe(302);
@@ -161,7 +200,9 @@ describe("Bouquet SSO", () => {
     const state = authorizeUrl.searchParams.get("state")!;
     expectedChallenge = authorizeUrl.searchParams.get("code_challenge")!;
     const callbackResponse = await callback(
-      new Request(`https://dasigap.test/auth/bouquet/callback?code=one-time-code&state=${encodeURIComponent(state)}`),
+      new Request(`https://dasigap.test/auth/bouquet/callback?code=one-time-code&state=${encodeURIComponent(state)}`, {
+        headers: oauthStateCookie(state),
+      }),
     );
     const cookie = callbackResponse.headers.get("set-cookie")!.split(";", 1)[0];
 
