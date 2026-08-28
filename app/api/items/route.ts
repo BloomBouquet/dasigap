@@ -1,6 +1,6 @@
 import {
-  parseRegistrationDuration,
   recordProductEvent,
+  resolveRegistrationDurationMs,
 } from "../../../src/analytics/events";
 import { requireUser } from "../../../src/auth/server-auth";
 import { createItem, listItems } from "../../../src/items/repository";
@@ -27,16 +27,34 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const user = await requireUser(request);
     const body = await readJsonBody(request);
-    const item = await createItem(user.userId, body as CreateItemInput);
+    const objectBody =
+      body && typeof body === "object" && !Array.isArray(body)
+        ? (body as Record<string, unknown>)
+        : {};
+    const { registrationStartEventId, ...itemInput } = objectBody;
+    const item = await createItem(user.userId, itemInput as CreateItemInput);
+
+    const completedAt = new Date();
+    let durationMs: number | null = null;
+
+    if (typeof registrationStartEventId === "string") {
+      try {
+        durationMs = await resolveRegistrationDurationMs(
+          user.userId,
+          registrationStartEventId,
+          completedAt,
+        );
+      } catch {
+        console.error("Failed to resolve item registration analytics duration");
+      }
+    }
 
     try {
       await recordProductEvent({
         userId: user.userId,
         itemId: item.id,
         type: "ITEM_REGISTRATION_COMPLETED",
-        durationMs: parseRegistrationDuration(
-          request.headers.get("x-dasigap-registration-duration-ms"),
-        ),
+        durationMs,
       });
     } catch {
       console.error("Failed to record item registration analytics");
