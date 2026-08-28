@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 
 const OWNER = "release-owner";
 const OTHER = "release-other";
@@ -7,7 +7,12 @@ function headers(userId: string) {
   return { "x-dasigap-dev-user": userId };
 }
 
-async function createItem(request: Parameters<typeof test>[0] extends never ? never : any, userId: string, name: string, purchasePrice: number) {
+async function createItem(
+  request: APIRequestContext,
+  userId: string,
+  name: string,
+  purchasePrice: number,
+) {
   const response = await request.post("/api/items", {
     headers: headers(userId),
     data: {
