@@ -81,6 +81,14 @@ export async function recordOwnedItemSale(userId: string, itemId: string, input:
         throw new SaleValidationError("판매 상태를 저장하지 못했습니다.");
       }
 
+      await tx.productEvent.create({
+        data: {
+          userId,
+          itemId,
+          type: "SALE_COMPLETED",
+        },
+      });
+
       return sale;
     });
   } catch (error) {
