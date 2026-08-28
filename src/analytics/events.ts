@@ -31,21 +31,6 @@ export const clientProductEventSchema = z.union([
 
 export type ClientProductEvent = z.infer<typeof clientProductEventSchema>;
 
-/**
- * Legacy parser kept for backwards-compatible unit coverage only.
- * Product registration no longer trusts this client-provided duration.
- */
-export function parseRegistrationDuration(value: string | null): number | null {
-  if (value === null || !/^\d+$/.test(value)) return null;
-
-  const duration = Number(value);
-  if (!Number.isSafeInteger(duration) || duration < 0 || duration > 3_600_000) {
-    return null;
-  }
-
-  return duration;
-}
-
 export function kstDateKey(date: Date): string {
   return new Date(date.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10);
 }
