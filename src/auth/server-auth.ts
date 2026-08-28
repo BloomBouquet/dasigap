@@ -1,6 +1,9 @@
 import type { AuthAdapter } from "./auth-adapter";
+import { PrismaAuthSessionStore } from "./auth-session";
 import { DevAuthAdapter } from "./dev-auth-adapter";
+import { SessionAuthAdapter } from "./session-auth-adapter";
 import type { AuthenticatedUser } from "./types";
+import { prisma } from "../db/prisma";
 
 export class AuthenticationError extends Error {
   readonly status = 401;
@@ -74,10 +77,20 @@ function resolveAuthMode(value: string | undefined): AuthMode {
   throw new AuthConfigurationError(`Unsupported AUTH_MODE: ${value}`);
 }
 
+function defaultBouquetAdapter(mode: AuthMode): AuthAdapter | undefined {
+  if (mode !== "bouquet") {
+    return undefined;
+  }
+
+  return new SessionAuthAdapter(new PrismaAuthSessionStore(prisma));
+}
+
 export async function requireUser(request: Request): Promise<AuthenticatedUser> {
+  const mode = resolveAuthMode(process.env.AUTH_MODE);
   const requireConfiguredUser = createRequireUser({
-    mode: resolveAuthMode(process.env.AUTH_MODE),
+    mode,
     nodeEnv: process.env.NODE_ENV ?? "production",
+    bouquetAdapter: defaultBouquetAdapter(mode),
   });
 
   return requireConfiguredUser(request);
