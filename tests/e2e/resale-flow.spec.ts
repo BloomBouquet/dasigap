@@ -1,7 +1,21 @@
 import { expect, test } from "@playwright/test";
 
-test("owner prepares a privacy-safe resale draft on mobile", async ({ page }) => {
+test("owner prepares a privacy-safe resale draft on mobile", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.setViewportSize({ width: 320, height: 720 });
+
+  const productEvents: Array<{ type?: string; itemId?: string }> = [];
+  page.on("request", (request) => {
+    if (!request.url().endsWith("/api/product-events") || request.method() !== "POST") {
+      return;
+    }
+
+    try {
+      productEvents.push(request.postDataJSON() as { type?: string; itemId?: string });
+    } catch {
+      // The assertions below fail if a valid event payload was not sent.
+    }
+  });
 
   const itemResponse = await page.request.post("/api/items", {
     data: {
@@ -34,6 +48,9 @@ test("owner prepares a privacy-safe resale draft on mobile", async ({ page }) =>
   await page.goto(`/items/${item.id}/resale`);
   await expect(page.getByRole("heading", { name: "판매 준비" })).toBeVisible();
   expect(await page.locator("body").evaluate((body) => body.scrollWidth)).toBeLessThanOrEqual(320);
+  await expect
+    .poll(() => productEvents.some((event) => event.type === "RESALE_STARTED" && event.itemId === item.id))
+    .toBe(true);
 
   await page.getByLabel("좋음").check();
   await page.getByRole("button", { name: "저장하고 다음" }).click();
@@ -58,6 +75,15 @@ test("owner prepares a privacy-safe resale draft on mobile", async ({ page }) =>
   await expect(page.getByText("희망 가격: 170,000원")).toBeVisible();
   await expect(page.getByRole("button", { name: "판매글 복사" })).toBeVisible();
   await expect(page.getByRole("button", { name: "사진 확인" })).toBeVisible();
+  await expect
+    .poll(() => productEvents.some((event) => event.type === "RESALE_COMPLETED" && event.itemId === item.id))
+    .toBe(true);
+
+  await page.getByRole("button", { name: "판매글 복사" }).click();
+  await expect(page.getByText("판매글을 복사했습니다.")).toBeVisible();
+  await expect
+    .poll(() => productEvents.some((event) => event.type === "RESALE_COPY_COPIED" && event.itemId === item.id))
+    .toBe(true);
 
   const draftResponse = await page.request.get(`/api/items/${item.id}/resale`);
   expect(draftResponse.status()).toBe(200);
