@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
-import { productEventRetentionCutoff } from "../analytics/retention";
+import { pruneExpiredProductEvents } from "../analytics/retention";
 import { prisma } from "../db/prisma";
 import { getOwnedItem } from "../items/repository";
 import { calculateUsageCost } from "./usage-cost";
@@ -61,6 +61,12 @@ export async function recordOwnedItemSale(userId: string, itemId: string, input:
   }
 
   try {
+    await pruneExpiredProductEvents();
+  } catch {
+    console.error("Failed to prune expired product analytics before sale");
+  }
+
+  try {
     return await prisma.$transaction(async (tx) => {
       const existing = await tx.saleRecord.findUnique({ where: { itemId } });
       if (existing) throw new SaleValidationError("이미 판매 완료 처리된 물건입니다.");
@@ -82,9 +88,6 @@ export async function recordOwnedItemSale(userId: string, itemId: string, input:
         throw new SaleValidationError("판매 상태를 저장하지 못했습니다.");
       }
 
-      await tx.productEvent.deleteMany({
-        where: { createdAt: { lt: productEventRetentionCutoff() } },
-      });
       await tx.productEvent.create({
         data: {
           userId,
