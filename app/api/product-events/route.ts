@@ -26,11 +26,15 @@ export async function POST(request: Request): Promise<Response> {
       await getOwnedItem(user.userId, event.itemId);
     }
 
-    await recordProductEvent({
+    const stored = await recordProductEvent({
       userId: user.userId,
       itemId: "itemId" in event ? event.itemId : null,
       type: event.type,
     });
+
+    if (event.type === "ITEM_REGISTRATION_STARTED") {
+      return noStore(Response.json({ eventId: stored.id }, { status: 201 }));
+    }
 
     return noStore(Response.json({ accepted: true }, { status: 202 }));
   } catch (error) {
