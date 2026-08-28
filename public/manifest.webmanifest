@@ -1,0 +1,11 @@
+{
+  "name": "다시값",
+  "short_name": "다시값",
+  "description": "구매부터 다시 판매할 때까지, 내 물건의 생애 관리",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f5f1",
+  "theme_color": "#275c46",
+  "lang": "ko"
+}

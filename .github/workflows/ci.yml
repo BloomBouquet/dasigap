@@ -59,3 +59,5 @@ jobs:
         run: pnpm exec playwright test tests/e2e/receipt-privacy.spec.ts
       - name: Resale preparation E2E
         run: pnpm exec playwright test tests/e2e/resale-flow.spec.ts
+      - name: Home PWA legal E2E
+        run: pnpm exec playwright test tests/e2e/home-pwa-legal.spec.ts
