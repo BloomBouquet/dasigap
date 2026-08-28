@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 type ItemField =
   | "name"
@@ -55,6 +55,21 @@ export function ItemForm() {
   const [form, setForm] = useState<FormState>(initialState);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
+  const registrationStartedAtRef = useRef<number | null>(null);
+  const registrationStartTrackedRef = useRef(false);
+
+  useEffect(() => {
+    registrationStartedAtRef.current = performance.now();
+
+    if (registrationStartTrackedRef.current) return;
+    registrationStartTrackedRef.current = true;
+
+    void fetch("/api/product-events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "ITEM_REGISTRATION_STARTED" }),
+    }).catch(() => undefined);
+  }, []);
 
   function updateField(name: ItemField, value: string) {
     setForm((current) => ({ ...current, [name]: value }));
@@ -74,10 +89,21 @@ export function ItemForm() {
     setSubmitting(true);
     setErrors({});
 
+    const startedAt = registrationStartedAtRef.current;
+    const registrationDurationMs =
+      startedAt === null ? null : Math.max(0, Math.round(performance.now() - startedAt));
+
     try {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+      };
+      if (registrationDurationMs !== null) {
+        headers["x-dasigap-registration-duration-ms"] = String(registrationDurationMs);
+      }
+
       const response = await fetch("/api/items", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify({
           name: form.name,
           category: form.category,
