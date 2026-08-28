@@ -1,4 +1,5 @@
 import type { AuthAdapter } from "./auth-adapter";
+import { BouquetAuthAdapter } from "./bouquet-auth-adapter";
 import { DevAuthAdapter } from "./dev-auth-adapter";
 import type { AuthenticatedUser } from "./types";
 
@@ -75,9 +76,11 @@ function resolveAuthMode(value: string | undefined): AuthMode {
 }
 
 export async function requireUser(request: Request): Promise<AuthenticatedUser> {
+  const mode = resolveAuthMode(process.env.AUTH_MODE);
   const requireConfiguredUser = createRequireUser({
-    mode: resolveAuthMode(process.env.AUTH_MODE),
+    mode,
     nodeEnv: process.env.NODE_ENV ?? "production",
+    bouquetAdapter: mode === "bouquet" ? new BouquetAuthAdapter() : undefined,
   });
 
   return requireConfiguredUser(request);
