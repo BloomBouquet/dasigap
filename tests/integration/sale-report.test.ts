@@ -42,7 +42,10 @@ describe("sale record and usage-cost report", () => {
     await prisma.item.deleteMany({ where: { userId: { in: USERS } } });
   });
 
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   afterAll(async () => {
     await prisma.productEvent.deleteMany({ where: { userId: { in: USERS } } });
@@ -77,6 +80,29 @@ describe("sale record and usage-cost report", () => {
       where: { userId: USER_A, itemId: item.id, type: "SALE_COMPLETED" },
     });
     expect(saleEvents).toHaveLength(1);
+  });
+
+  it("keeps sale completion available when expired-event cleanup fails", async () => {
+    const item = await createItem();
+    vi.spyOn(prisma.productEvent, "deleteMany").mockRejectedValueOnce(
+      new Error("retention cleanup unavailable"),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await POST_SALE(
+      request(`http://localhost/api/items/${item.id}/sale`, {
+        method: "POST",
+        body: JSON.stringify({ soldAt: "2026-08-01", soldPrice: 170000 }),
+      }),
+      itemContext(item.id),
+    );
+
+    expect(response.status).toBe(201);
+    expect(
+      await prisma.productEvent.count({
+        where: { userId: USER_A, itemId: item.id, type: "SALE_COMPLETED" },
+      }),
+    ).toBe(1);
   });
 
   it("rejects invalid sale data without changing item state", async () => {
