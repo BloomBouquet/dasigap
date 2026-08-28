@@ -123,3 +123,23 @@ model SaleRecord {
   channel   String?
   item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
 }
+
+model OAuthTransientState {
+  stateHash    String   @id
+  codeVerifier String
+  returnTo     String
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+model AuthSession {
+  tokenHash String   @id
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
