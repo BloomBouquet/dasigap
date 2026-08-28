@@ -60,11 +60,6 @@ export function ResaleStepper({ itemId }: { itemId: string }) {
   useEffect(() => {
     const controller = new AbortController();
 
-    if (startedItemRef.current !== itemId) {
-      startedItemRef.current = itemId;
-      postResaleEvent("RESALE_STARTED", itemId);
-    }
-
     async function load() {
       try {
         const [draftResponse, componentResponse] = await Promise.all([
@@ -87,6 +82,11 @@ export function ResaleStepper({ itemId }: { itemId: string }) {
           setGeneratedText(draft.generatedText ?? "");
         }
         setComponents(componentBody.components ?? []);
+
+        if (startedItemRef.current !== itemId) {
+          startedItemRef.current = itemId;
+          postResaleEvent("RESALE_STARTED", itemId);
+        }
       } catch (error) {
         if ((error as Error).name === "AbortError") return;
         setMessage("네트워크 연결을 확인해주세요.");
