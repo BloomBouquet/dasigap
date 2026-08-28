@@ -135,7 +135,7 @@ describe("sale record and usage-cost report", () => {
     ).toBe(1);
   });
 
-  it("returns sold-item cost/profit DTOs and aggregate totals only for the owner", async () => {
+  it("returns sold-item cost/profit DTOs and aggregate totals only for the owner and tracks report views", async () => {
     const costItem = await createItem(USER_A, { name: "Cost item", purchasePrice: 249000 });
     const profitItem = await createItem(USER_A, { name: "Profit item", purchasePrice: 100000 });
     const otherItem = await createItem(USER_B, { name: "Other user", purchasePrice: 999999 });
@@ -182,6 +182,11 @@ describe("sale record and usage-cost report", () => {
       netUsageCost: 59000,
     });
     expect(JSON.stringify(body)).not.toContain("Other user");
+
+    const events = await prisma.productEvent.findMany({
+      where: { userId: USER_A, itemId: null },
+    });
+    expect(events.map((event) => String(event.type))).toContain("USAGE_COST_VIEWED");
   });
 
   it("returns the same 404 for cross-user and missing item sale attempts", async () => {
