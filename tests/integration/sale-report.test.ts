@@ -38,17 +38,19 @@ describe("sale record and usage-cost report", () => {
   beforeEach(async () => {
     vi.stubEnv("AUTH_MODE", "dev");
     vi.stubEnv("NODE_ENV", "test");
+    await prisma.productEvent.deleteMany({ where: { userId: { in: USERS } } });
     await prisma.item.deleteMany({ where: { userId: { in: USERS } } });
   });
 
   afterEach(() => vi.unstubAllEnvs());
 
   afterAll(async () => {
+    await prisma.productEvent.deleteMany({ where: { userId: { in: USERS } } });
     await prisma.item.deleteMany({ where: { userId: { in: USERS } } });
     await prisma.$disconnect();
   });
 
-  it("creates one final sale and marks the item SOLD atomically", async () => {
+  it("creates one final sale, marks the item SOLD, and records SALE_COMPLETED atomically", async () => {
     const item = await createItem();
 
     const response = await POST_SALE(
@@ -70,6 +72,11 @@ describe("sale record and usage-cost report", () => {
     });
     expect(persisted?.status).toBe("SOLD");
     expect(persisted?.saleRecord?.soldPrice).toBe(170000);
+
+    const saleEvents = await prisma.productEvent.findMany({
+      where: { userId: USER_A, itemId: item.id, type: "SALE_COMPLETED" },
+    });
+    expect(saleEvents).toHaveLength(1);
   });
 
   it("rejects invalid sale data without changing item state", async () => {
@@ -99,9 +106,14 @@ describe("sale record and usage-cost report", () => {
     });
     expect(persisted?.status).toBe("OWNED");
     expect(persisted?.saleRecord).toBeNull();
+    expect(
+      await prisma.productEvent.count({
+        where: { userId: USER_A, itemId: item.id, type: "SALE_COMPLETED" },
+      }),
+    ).toBe(0);
   });
 
-  it("rejects a second final sale record", async () => {
+  it("rejects a second final sale record without duplicating SALE_COMPLETED", async () => {
     const item = await createItem();
     const body = JSON.stringify({ soldAt: "2026-08-01", soldPrice: 170000 });
 
@@ -116,6 +128,11 @@ describe("sale record and usage-cost report", () => {
       itemContext(item.id),
     );
     expect(second.status).toBe(400);
+    expect(
+      await prisma.productEvent.count({
+        where: { userId: USER_A, itemId: item.id, type: "SALE_COMPLETED" },
+      }),
+    ).toBe(1);
   });
 
   it("returns sold-item cost/profit DTOs and aggregate totals only for the owner", async () => {
