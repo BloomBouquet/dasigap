@@ -13,15 +13,18 @@ const validItem = {
   purchasePrice: 249000,
 };
 
-function request(duration: string, name = validItem.name) {
+function request(
+  body: Record<string, unknown>,
+  extraHeaders: Record<string, string> = {},
+) {
   return new Request("http://localhost/api/items", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       [DEV_USER_HEADER]: USER_ID,
-      "x-dasigap-registration-duration-ms": duration,
+      ...extraHeaders,
     },
-    body: JSON.stringify({ ...validItem, name }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -41,8 +44,18 @@ describe("item registration analytics", () => {
     await prisma.$disconnect();
   });
 
-  it("records a bounded registration duration after item creation", async () => {
-    const response = await POST(request("84500"));
+  it("records registration duration from the user's server start event", async () => {
+    const startEvent = await prisma.productEvent.create({
+      data: {
+        userId: USER_ID,
+        type: "ITEM_REGISTRATION_STARTED",
+        createdAt: new Date(Date.now() - 84_500),
+      },
+    });
+
+    const response = await POST(
+      request({ ...validItem, registrationStartEventId: startEvent.id }),
+    );
     expect(response.status).toBe(201);
     const body = await response.json();
 
@@ -53,11 +66,21 @@ describe("item registration analytics", () => {
         type: "ITEM_REGISTRATION_COMPLETED",
       },
     });
-    expect(event?.durationMs).toBe(84500);
+    expect(event?.durationMs).toBeGreaterThanOrEqual(84_000);
+    expect(event?.durationMs).toBeLessThan(90_000);
   });
 
-  it("keeps item creation successful when the duration header is invalid", async () => {
-    const response = await POST(request("99999999", "Second item"));
+  it("keeps item creation successful and records null when no owned server start exists", async () => {
+    const response = await POST(
+      request(
+        {
+          ...validItem,
+          name: "Second item",
+          registrationStartEventId: "00000000-0000-4000-8000-000000000999",
+        },
+        { "x-dasigap-registration-duration-ms": "84500" },
+      ),
+    );
     expect(response.status).toBe(201);
     const body = await response.json();
 
