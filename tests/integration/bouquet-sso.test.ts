@@ -141,6 +141,20 @@ describe("Bouquet SSO", () => {
     expect(replay.status).toBe(400);
   });
 
+  it("uses the registered callback origin instead of a hostile request host", async () => {
+    const startResponse = await start(new Request("https://dasigap.test/auth/bouquet/start?returnTo=%2Fitems"));
+    const authorizeUrl = new URL(startResponse.headers.get("location")!);
+    const state = authorizeUrl.searchParams.get("state")!;
+    expectedChallenge = authorizeUrl.searchParams.get("code_challenge")!;
+
+    const callbackResponse = await callback(
+      new Request(`https://host-header-attacker.example/auth/bouquet/callback?code=one-time-code&state=${encodeURIComponent(state)}`),
+    );
+
+    expect(callbackResponse.status).toBe(302);
+    expect(callbackResponse.headers.get("location")).toBe("https://dasigap.test/items");
+  });
+
   it("invalidates the project session without logging out the central Bouquet session", async () => {
     const startResponse = await start(new Request("https://dasigap.test/auth/bouquet/start"));
     const authorizeUrl = new URL(startResponse.headers.get("location")!);
