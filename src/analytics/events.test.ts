@@ -17,7 +17,14 @@ describe("product event privacy contract", () => {
       }),
     ).toMatchObject({ type: "RESALE_STARTED" });
 
-    expect(() => clientProductEventSchema.parse({ type: "SALE_COMPLETED" })).toThrow();
+    for (const serverOnlyType of [
+      "ITEM_REGISTRATION_COMPLETED",
+      "ITEM_LIFECYCLE_UPDATED",
+      "SALE_COMPLETED",
+      "USAGE_COST_VIEWED",
+    ]) {
+      expect(() => clientProductEventSchema.parse({ type: serverOnlyType })).toThrow();
+    }
     expect(() => clientProductEventSchema.parse({ type: "UNKNOWN" })).toThrow();
   });
 
