@@ -1,3 +1,4 @@
+import { recordProductEvent } from "../../../../../src/analytics/events";
 import { requireUser } from "../../../../../src/auth/server-auth";
 import { throwOwnedItemNotFound } from "../../../../../src/db/ownership";
 import {
@@ -18,6 +19,14 @@ async function itemId(context: Context) {
   return id;
 }
 
+async function trackLifecycleUpdate(userId: string, id: string) {
+  try {
+    await recordProductEvent({ userId, itemId: id, type: "ITEM_LIFECYCLE_UPDATED" });
+  } catch {
+    console.error("Failed to record component lifecycle analytics");
+  }
+}
+
 export async function GET(request: Request, context: Context): Promise<Response> {
   try {
     const user = await requireUser(request);
@@ -31,11 +40,13 @@ export async function GET(request: Request, context: Context): Promise<Response>
 export async function POST(request: Request, context: Context): Promise<Response> {
   try {
     const user = await requireUser(request);
+    const id = await itemId(context);
     const component = await createOwnedComponent(
       user.userId,
-      await itemId(context),
+      id,
       await readJsonBody(request),
     );
+    await trackLifecycleUpdate(user.userId, id);
     return Response.json({ component }, { status: 201 });
   } catch (error) {
     return toApiErrorResponse(error);
@@ -45,11 +56,13 @@ export async function POST(request: Request, context: Context): Promise<Response
 export async function PATCH(request: Request, context: Context): Promise<Response> {
   try {
     const user = await requireUser(request);
+    const id = await itemId(context);
     const component = await patchOwnedComponent(
       user.userId,
-      await itemId(context),
+      id,
       await readJsonBody(request),
     );
+    await trackLifecycleUpdate(user.userId, id);
     return Response.json({ component });
   } catch (error) {
     return toApiErrorResponse(error);
