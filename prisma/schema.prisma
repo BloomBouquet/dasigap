@@ -140,6 +140,7 @@ model ProductEvent {
   itemId     String?          @db.Uuid
   type       ProductEventType
   durationMs Int?
+  dedupeKey  String?          @unique
   createdAt  DateTime         @default(now())
 
   @@index([userId, createdAt])
