@@ -90,7 +90,7 @@ test("sold records produce both usage cost and sale profit in the report", async
   await expect(page.getByRole("heading", { name: "Release Profit Item" })).toBeVisible();
   await expect(page.getByText("79,000원")).toBeVisible();
   await expect(page.getByText("판매 차익")).toBeVisible();
-  await expect(page.getByText("20,000원")).toBeVisible();
+  await expect(page.getByText("20,000원", { exact: true })).toBeVisible();
 
   const otherReport = await request.get("/api/report", { headers: headers(OTHER) });
   expect(otherReport.status()).toBe(200);
