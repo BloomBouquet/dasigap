@@ -44,9 +44,16 @@ function uniqueItems(events: ValidationEvent[], type: string) {
   );
 }
 
+function intersect<T>(values: Set<T>, cohort: Set<T>) {
+  return new Set([...values].filter((value) => cohort.has(value)));
+}
+
 export function computeValidationMetrics(events: ValidationEvent[]) {
   const registrationStartedUsers = uniqueUsers(events, "ITEM_REGISTRATION_STARTED");
-  const registrationCompletedUsers = uniqueUsers(events, "ITEM_REGISTRATION_COMPLETED");
+  const registrationCompletedUsers = intersect(
+    uniqueUsers(events, "ITEM_REGISTRATION_COMPLETED"),
+    registrationStartedUsers,
+  );
   const registrationDurations = events.flatMap((event) =>
     event.type === "ITEM_REGISTRATION_COMPLETED" && event.durationMs !== null
       ? [event.durationMs]
@@ -70,9 +77,12 @@ export function computeValidationMetrics(events: ValidationEvent[]) {
   }
 
   const resaleStartedItems = uniqueItems(events, "RESALE_STARTED");
-  const resaleCompletedItems = uniqueItems(events, "RESALE_COMPLETED");
-  const copiedItems = uniqueItems(events, "RESALE_COPY_COPIED");
-  const soldItems = uniqueItems(events, "SALE_COMPLETED");
+  const resaleCompletedItems = intersect(
+    uniqueItems(events, "RESALE_COMPLETED"),
+    resaleStartedItems,
+  );
+  const copiedItems = intersect(uniqueItems(events, "RESALE_COPY_COPIED"), resaleCompletedItems);
+  const soldItems = intersect(uniqueItems(events, "SALE_COMPLETED"), resaleStartedItems);
 
   const lifecycleEvents = events.filter((event) => event.type === "ITEM_LIFECYCLE_UPDATED");
   const usageCostEvents = events.filter((event) => event.type === "USAGE_COST_VIEWED");
