@@ -1,7 +1,8 @@
-import { Prisma, type ProductEventType } from "@prisma/client";
+import type { ProductEventType } from "@prisma/client";
 import { z } from "zod";
 
 import { prisma } from "../db/prisma";
+import { pruneExpiredProductEvents } from "./retention";
 
 const MAX_REGISTRATION_DURATION_MS = 1_800_000;
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -57,16 +58,19 @@ export type RecordProductEventInput = {
   dedupeKey?: string | null;
 };
 
-export function recordProductEvent(input: RecordProductEventInput) {
-  return prisma.productEvent.create({
-    data: {
-      userId: input.userId,
-      itemId: input.itemId ?? null,
-      type: input.type,
-      durationMs: input.durationMs ?? null,
-      dedupeKey: input.dedupeKey ?? null,
-    },
-  });
+function eventData(input: RecordProductEventInput) {
+  return {
+    userId: input.userId,
+    itemId: input.itemId ?? null,
+    type: input.type,
+    durationMs: input.durationMs ?? null,
+    dedupeKey: input.dedupeKey ?? null,
+  };
+}
+
+export async function recordProductEvent(input: RecordProductEventInput) {
+  await pruneExpiredProductEvents();
+  return prisma.productEvent.create({ data: eventData(input) });
 }
 
 export async function recordProductEventOnce(input: RecordProductEventInput) {
@@ -74,14 +78,12 @@ export async function recordProductEventOnce(input: RecordProductEventInput) {
     return recordProductEvent(input);
   }
 
-  try {
-    return await recordProductEvent(input);
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return null;
-    }
-    throw error;
-  }
+  await pruneExpiredProductEvents();
+  return prisma.productEvent.upsert({
+    where: { dedupeKey: input.dedupeKey },
+    create: eventData(input),
+    update: {},
+  });
 }
 
 export async function resolveRegistrationDurationMs(
