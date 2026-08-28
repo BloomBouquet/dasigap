@@ -63,6 +63,22 @@ describe("product validation metrics", () => {
     expect(metrics.retention).toEqual({ cohortUsers: 1, d7Users: 0, d7Rate: 0, d30Users: 1, d30Rate: 1 });
   });
 
+  it("counts funnel numerators only when the same user or item belongs to the denominator cohort", () => {
+    const metrics = computeValidationMetrics([
+      event("ITEM_REGISTRATION_STARTED", "started-user", "2026-08-01T00:00:00.000Z"),
+      event("ITEM_REGISTRATION_COMPLETED", "other-user", "2026-08-01T00:01:00.000Z", { itemId: "other-item" }),
+      event("RESALE_STARTED", "u1", "2026-08-01T00:00:00.000Z", { itemId: "started-item" }),
+      event("RESALE_COMPLETED", "u2", "2026-08-01T00:01:00.000Z", { itemId: "completed-only" }),
+      event("RESALE_COPY_COPIED", "u3", "2026-08-01T00:02:00.000Z", { itemId: "copied-only" }),
+      event("SALE_COMPLETED", "u4", "2026-08-01T00:03:00.000Z", { itemId: "sold-only" }),
+    ]);
+
+    expect(metrics.firstItem).toEqual({ startedUsers: 1, completedUsers: 0, conversionRate: 0 });
+    expect(metrics.resaleCompletion).toEqual({ startedItems: 1, completedItems: 0, conversionRate: 0 });
+    expect(metrics.copyUsage).toEqual({ completedItems: 1, copiedItems: 0, conversionRate: 0 });
+    expect(metrics.saleCompletion).toEqual({ startedItems: 1, soldItems: 0, conversionRate: 0 });
+  });
+
   it("returns zero rates instead of NaN when a denominator is empty", () => {
     const metrics = computeValidationMetrics([]);
 
