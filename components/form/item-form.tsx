@@ -55,20 +55,32 @@ export function ItemForm() {
   const [form, setForm] = useState<FormState>(initialState);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
-  const registrationStartedAtRef = useRef<number | null>(null);
+  const registrationStartEventIdRef = useRef<string | null>(null);
   const registrationStartTrackedRef = useRef(false);
 
   useEffect(() => {
-    registrationStartedAtRef.current = performance.now();
-
     if (registrationStartTrackedRef.current) return;
     registrationStartTrackedRef.current = true;
 
-    void fetch("/api/product-events", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ type: "ITEM_REGISTRATION_STARTED" }),
-    }).catch(() => undefined);
+    async function trackRegistrationStart() {
+      try {
+        const response = await fetch("/api/product-events", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ type: "ITEM_REGISTRATION_STARTED" }),
+        });
+        if (!response.ok) return;
+
+        const body = await response.json();
+        if (typeof body?.eventId === "string") {
+          registrationStartEventIdRef.current = body.eventId;
+        }
+      } catch {
+        // Analytics is best-effort and must not block item registration.
+      }
+    }
+
+    void trackRegistrationStart();
   }, []);
 
   function updateField(name: ItemField, value: string) {
@@ -89,21 +101,10 @@ export function ItemForm() {
     setSubmitting(true);
     setErrors({});
 
-    const startedAt = registrationStartedAtRef.current;
-    const registrationDurationMs =
-      startedAt === null ? null : Math.max(0, Math.round(performance.now() - startedAt));
-
     try {
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-      };
-      if (registrationDurationMs !== null) {
-        headers["x-dasigap-registration-duration-ms"] = String(registrationDurationMs);
-      }
-
       const response = await fetch("/api/items", {
         method: "POST",
-        headers,
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: form.name,
           category: form.category,
@@ -112,6 +113,7 @@ export function ItemForm() {
           brand: form.brand,
           modelName: form.modelName,
           storeName: form.storeName,
+          registrationStartEventId: registrationStartEventIdRef.current,
         }),
       });
 
