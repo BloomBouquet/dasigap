@@ -51,6 +51,15 @@ jobs:
         run: pnpm typecheck
       - name: Unit and integration tests
         run: pnpm test
+      - name: S3 signed URL integration
+        env:
+          RUN_S3_INTEGRATION: "1"
+          OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:9000
+          OBJECT_STORAGE_REGION: us-east-1
+          OBJECT_STORAGE_BUCKET: dasigap-ci
+          OBJECT_STORAGE_ACCESS_KEY_ID: dasigap-ci
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: dasigap-ci-secret
+        run: pnpm exec vitest run tests/integration/s3-storage.test.ts
       - name: Build
         run: pnpm build
       - name: First item E2E
