@@ -13,7 +13,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17-alpine
@@ -49,9 +49,30 @@ jobs:
         run: pnpm prisma migrate deploy
       - name: Typecheck
         run: pnpm typecheck
-      - name: Unit and integration tests
+      - name: Unit, integration, security, and forbidden-feature tests
         run: pnpm test
-      - name: S3 signed URL integration
+      - name: Start S3-compatible MinIO
+        run: |
+          docker run -d --name dasigap-minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=dasigap-ci \
+            -e MINIO_ROOT_PASSWORD=dasigap-ci-secret \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = "1"
+
+          docker run --rm --network host --entrypoint /bin/sh \
+            minio/mc:RELEASE.2025-08-13T08-35-41Z \
+            -c 'mc alias set ci http://127.0.0.1:9000 dasigap-ci dasigap-ci-secret && mc mb --ignore-existing ci/dasigap-ci'
+      - name: Real S3 signed URL integration
         env:
           RUN_S3_INTEGRATION: "1"
           OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:9000
@@ -62,11 +83,5 @@ jobs:
         run: pnpm exec vitest run tests/integration/s3-storage.test.ts
       - name: Build
         run: pnpm build
-      - name: First item E2E
-        run: pnpm exec playwright test tests/e2e/first-item.spec.ts
-      - name: Receipt privacy E2E
-        run: pnpm exec playwright test tests/e2e/receipt-privacy.spec.ts
-      - name: Resale preparation E2E
-        run: pnpm exec playwright test tests/e2e/resale-flow.spec.ts
-      - name: Home PWA legal E2E
-        run: pnpm exec playwright test tests/e2e/home-pwa-legal.spec.ts
+      - name: Full Playwright E2E release suite
+        run: pnpm test:e2e
