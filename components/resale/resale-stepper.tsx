@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { GeneratedCopy } from "./generated-copy";
 
@@ -34,6 +34,15 @@ const CONDITION_OPTIONS: Array<{ value: ConditionGrade; label: string }> = [
   { value: "WORN", label: "사용감 있음" },
 ];
 
+function postResaleEvent(type: "RESALE_STARTED" | "RESALE_COMPLETED", itemId: string) {
+  void fetch("/api/product-events", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ type, itemId }),
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
 export function ResaleStepper({ itemId }: { itemId: string }) {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -45,9 +54,16 @@ export function ResaleStepper({ itemId }: { itemId: string }) {
   const [photoChecklist, setPhotoChecklist] = useState<PhotoChecklist>(EMPTY_PHOTOS);
   const [generatedText, setGeneratedText] = useState("");
   const [components, setComponents] = useState<ComponentItem[]>([]);
+  const startedItemRef = useRef<string | null>(null);
+  const completedItemRef = useRef<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
+
+    if (startedItemRef.current !== itemId) {
+      startedItemRef.current = itemId;
+      postResaleEvent("RESALE_STARTED", itemId);
+    }
 
     async function load() {
       try {
@@ -108,6 +124,12 @@ export function ResaleStepper({ itemId }: { itemId: string }) {
       setAskingPrice(draft.askingPrice ? String(draft.askingPrice) : "");
       setPhotoChecklist(draft.photoChecklist ?? EMPTY_PHOTOS);
       setGeneratedText(draft.generatedText ?? "");
+
+      if (nextStep === 6 && completedItemRef.current !== itemId) {
+        completedItemRef.current = itemId;
+        postResaleEvent("RESALE_COMPLETED", itemId);
+      }
+
       setStep(nextStep);
     } catch {
       setMessage("네트워크 연결을 확인해주세요.");
@@ -289,7 +311,11 @@ export function ResaleStepper({ itemId }: { itemId: string }) {
       ) : null}
 
       {step === 6 ? (
-        <GeneratedCopy generatedText={generatedText} onReviewPhotos={() => setStep(4)} />
+        <GeneratedCopy
+          generatedText={generatedText}
+          itemId={itemId}
+          onReviewPhotos={() => setStep(4)}
+        />
       ) : null}
     </div>
   );
