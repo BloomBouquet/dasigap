@@ -12,72 +12,69 @@
 1. 신규 사용자가 첫 물건 등록을 완료한다.
 2. 등록 이후 다시 돌아와 물건의 생애정보를 관리한다.
 3. 장기 기록이 실제 판매 준비까지 이어진다.
-4. 판매 준비 결과가 복사되어 외부 플랫폼 게시에 사용될 가능성이 있다.
-5. 실제 판매 완료와 사용비 계산까지 한 사이클이 연결된다.
+4. 판매 준비 결과가 실제 복사 행동까지 이어진다.
+5. 실제 판매 완료와 사용비 확인까지 한 사이클이 연결된다.
 
-이번 계측은 마케팅 추적이나 광고 최적화 목적이 아니다. 제품 기능의 유효성을 검증하기 위한 최소 행동 데이터만 수집한다.
+이번 계측은 광고·마케팅 추적이 아니라 제품 기능 유효성 검증만을 목적으로 한다.
 
 ## 2. 비목표
 
 V1 계측에서는 다음을 하지 않는다.
 
-- 외부 analytics SDK 도입
-- 사용자 행동 전체 자동 캡처
-- DOM 클릭 전체 추적
+- 외부 analytics SDK
+- 자동 클릭/DOM 이벤트 수집
 - 세션 리플레이
-- 광고 식별자 수집
-- device fingerprint 생성
+- 광고 식별자
+- device fingerprint
 - IP 기반 사용자 식별
-- 영수증/문서 내용 수집
-- 판매글 원문 수집
-- 제품명, 브랜드, 모델명, 구매처 등의 자유 텍스트를 이벤트 속성으로 수집
-- 하자 메모, 수리 메모, 구성품명 등 도메인 텍스트 수집
+- 자유형 `properties: JSON`
+- 영수증/문서 내용
+- 판매글 원문
+- 제품명/브랜드/모델/구매처 자유 텍스트
+- 구성품명/하자 메모/수리 메모
 
 ## 3. 핵심 원칙
 
 ### 3.1 First-party only
 
-이벤트는 다시값 서버와 PostgreSQL 내부에서만 저장한다. 제3자 분석 사업자에게 사용자 행동을 전송하지 않는다.
+이벤트는 다시값 서버와 PostgreSQL 내부에서만 저장한다.
 
 ### 3.2 Allowlist schema
 
-임의 `properties: JSON` 구조를 허용하지 않는다. 이벤트 종류별 허용 필드를 타입과 스키마로 고정한다.
+이벤트 타입과 저장 필드를 코드/DB 스키마로 고정한다. 임의 metadata JSON은 허용하지 않는다.
 
-### 3.3 No sensitive payload
+### 3.3 Server-trusted completion
 
-계측은 행동의 존재와 시간만 기록하며, 문서·영수증·판매글·하자·수리 내용 자체를 기록하지 않는다.
+핵심 성공 이벤트는 실제 도메인 작업 성공 이후 서버에서 기록한다.
 
-### 3.4 Server-trusted completion
+### 3.4 Non-blocking analytics
 
-핵심 성공 이벤트는 가능한 한 서버에서 실제 도메인 작업 성공 이후 기록한다. 클라이언트가 임의로 성공 이벤트를 만들어 서버에 보내는 구조를 피한다.
+계측 저장 실패만으로 물건 등록·판매 준비·판매 완료 같은 핵심 제품 동작이 실패하면 안 된다.
 
-### 3.5 Product analytics failure must not break product action
+### 3.5 최소 데이터
 
-계측 저장 실패 때문에 물건 등록, 판매 준비 저장, 판매 완료 같은 핵심 기능이 실패하면 안 된다. 비즈니스 트랜잭션 성공 후 계측이 실패하면 서버 로그에 남기되 사용자 작업은 성공으로 유지한다.
+행동의 종류, 내부 식별자, 서버 시간, 필요한 경우 서버가 계산한 duration만 저장한다.
 
-## 4. 이벤트 모델
-
-### 4.1 ProductEvent
+## 4. 데이터 모델
 
 ```text
 ProductEvent
 - id: UUID
 - userId: String
-- itemId: String?        // 해당 이벤트가 특정 물건과 연결될 때만
+- itemId: String?
 - type: ProductEventType
-- durationMs: Int?       // 허용 이벤트에서만
+- durationMs: Int?
 - occurredAt: DateTime
 ```
 
-외래키 정책:
+정책:
 
-- `userId`는 공통 인증의 안정적인 사용자 식별자다.
-- `itemId`는 해당 사용자 소유 물건과 연결되는 이벤트에만 사용한다.
-- 계측 데이터 보존 때문에 Item 삭제가 막히지 않도록 `itemId`는 nullable이며 Item 삭제 시 `SET NULL` 또는 명시적 비식별 처리한다.
+- `userId`: 현재 인증 사용자 식별자.
+- `itemId`: 특정 물건과 연결되는 이벤트에서만 저장.
+- Item 삭제가 ProductEvent 때문에 막히지 않도록 `itemId`는 nullable + `onDelete: SetNull`을 기본안으로 한다.
+- 실제 판매가격 등 도메인 값은 이벤트 테이블에 중복 저장하지 않는다.
 
-### 4.2 이벤트 타입
-
-V1 allowlist:
+### 4.1 이벤트 타입
 
 ```text
 ITEM_REGISTRATION_STARTED
@@ -91,126 +88,119 @@ SALE_COMPLETED
 USAGE_COST_VIEWED
 ```
 
-## 5. 이벤트별 정의
+## 5. 이벤트 정의
 
 ### ITEM_REGISTRATION_STARTED
 
-발생 조건:
-- `/items/new`의 등록 폼이 사용자에게 준비된 뒤 1회.
+발생:
+- `/items/new`에서 등록 폼이 준비된 뒤 클라이언트가 `POST /api/analytics/events` 호출.
 
-저장 필드:
-- userId
-- type
-- occurredAt
+서버 응답:
 
-주의:
-- 클라이언트 이벤트이므로 신뢰 가능한 성공 지표에는 사용하지 않는다.
-- 첫 등록 완료 소요시간 계산을 위한 시작점으로만 사용한다.
+```json
+{ "eventId": "..." }
+```
+
+이벤트 저장:
+- `userId`
+- `type`
+- 서버 `occurredAt`
+
+클라이언트는 반환받은 `eventId`를 메모리 상태에 보관하고 등록 제출 시 `registrationEventId`로 `/api/items`에 전달한다.
 
 ### ITEM_REGISTRATION_COMPLETED
 
-발생 조건:
-- `POST /api/items`가 DB에 Item을 성공적으로 생성한 직후.
+발생:
+- `POST /api/items`에서 Item 생성이 성공한 이후.
 
-저장 필드:
-- userId
-- itemId
-- durationMs (클라이언트 시작시간을 서버가 검증 가능한 범위로 전달한 경우에만)
-- type
-- occurredAt
+duration 계산:
 
-`durationMs` 규칙:
-- 0보다 커야 한다.
-- 최대 30분으로 clamp/reject 한다.
-- 없거나 비정상 값이면 null로 기록하고 등록 자체는 실패시키지 않는다.
+1. 요청의 `registrationEventId` 조회
+2. 현재 `userId` 소유 이벤트인지 확인
+3. 타입이 `ITEM_REGISTRATION_STARTED`인지 확인
+4. 완료 서버 시각 - 시작 이벤트 서버 시각 계산
+5. 0 < duration <= 30분이면 저장
+6. 유효하지 않으면 `durationMs = null`
+
+중요:
+- duration 검증 실패는 Item 생성을 실패시키지 않는다.
+- 클라이언트 timestamp를 신뢰하지 않는다.
 
 ### APP_VISITED
 
-발생 조건:
-- 인증된 사용자가 앱 셸을 로드한 날의 첫 방문.
+발생:
+- 인증된 앱 셸이 브라우저에 실제 마운트될 때 클라이언트가 이벤트 API 호출.
 
 중복 억제:
-- 사용자별 KST calendar date 기준 최대 1건.
+- 사용자별 KST calendar date당 최대 1건.
 
 목적:
-- D1/D7/D30 재방문 계산.
+- D1/D7/D30 재방문 cohort 계산.
 
 ### ITEM_LIFECYCLE_UPDATED
 
-발생 조건:
-- 구성품, 반품/보증 정보, 유지보수/수리, 상태 등 장기 관리 정보 중 하나를 성공적으로 추가 또는 변경.
+발생:
+- 반품/보증 정보, 구성품, 유지보수/수리, 상태 등 장기 관리 정보가 성공적으로 변경된 뒤 서버에서 기록.
 
-중복 억제:
-- 같은 요청에서 여러 내부 row가 바뀌더라도 이벤트 1건.
+규칙:
+- 같은 API 요청에서 여러 row가 바뀌어도 이벤트는 1건.
 
 ### RESALE_STARTED
 
-발생 조건:
-- 사용자가 특정 item의 판매 준비 화면을 처음 진입하거나 최초 resale draft를 생성하는 시점.
+발생:
+- 특정 item의 최초 resale draft가 서버에서 생성된 시점.
 
-권장 구현:
-- 서버에서 최초 resale draft 생성 시 1회 기록.
+중복 억제:
+- item당 최초 1회.
 
 ### RESALE_COMPLETED
 
-발생 조건:
-- 판매 준비 Step 6에 도달할 만큼 필요한 데이터가 서버에 저장되고 `generatedText`가 생성된 최초 시점.
+발생:
+- 판매 준비 필수 데이터가 저장되고 `generatedText`가 생성되어 Step 6 결과를 제공할 수 있게 된 최초 시점.
 
 중복 억제:
-- item당 최초 1회만 핵심 completion event로 기록.
+- item당 최초 1회.
 
 ### RESALE_COPY_COPIED
 
-발생 조건:
-- 사용자가 생성 판매 요약의 복사 버튼을 실제로 눌렀고 Clipboard API 호출이 성공했을 때.
-
-저장 필드:
-- userId
-- itemId
-- type
-- occurredAt
+발생:
+- 사용자가 판매 요약 복사 버튼을 눌렀고 Clipboard API가 성공한 후 클라이언트가 이벤트 API 호출.
 
 금지:
-- 복사한 문자열 자체를 서버로 보내지 않는다.
+- 복사한 텍스트 자체는 전송하지 않는다.
 
 ### SALE_COMPLETED
 
-발생 조건:
-- 실제 판매 완료 API가 Sale row와 item 상태를 성공적으로 반영한 이후.
-
-저장 필드:
-- userId
-- itemId
-- type
-- occurredAt
+발생:
+- Sale row 생성과 item 판매 완료 상태 반영이 성공한 이후 서버에서 기록.
 
 금지:
-- 이벤트 테이블에는 실제 판매가격을 중복 저장하지 않는다. 가격은 기존 Sale 도메인 테이블에서만 조회한다.
+- 판매가격은 ProductEvent에 저장하지 않는다.
 
 ### USAGE_COST_VIEWED
 
-발생 조건:
-- 판매 완료된 물건의 사용비 결과가 사용자에게 실제 렌더링되는 시점.
+발생:
+- 판매 완료 물건의 사용비 카드/리포트가 브라우저에 실제 노출된 뒤 클라이언트가 이벤트 API 호출.
 
-목적:
-- 판매 완료 후 리포트 소비 여부 확인.
+중복 억제:
+- 사용자+item 기준 KST 날짜당 최대 1건이면 충분하다.
 
 ## 6. 클라이언트 이벤트 API
-
-클라이언트에서만 알 수 있는 이벤트는 다음 둘로 제한한다.
-
-- `ITEM_REGISTRATION_STARTED`
-- `RESALE_COPY_COPIED`
-
-필요하면 `USAGE_COST_VIEWED`도 클라이언트 API를 사용하지만, 가능하면 서버 렌더 경계에서 처리한다.
-
-API:
 
 ```text
 POST /api/analytics/events
 ```
 
-요청 예:
+클라이언트에서 생성 가능한 타입은 다음으로 제한한다.
+
+```text
+ITEM_REGISTRATION_STARTED
+APP_VISITED
+RESALE_COPY_COPIED
+USAGE_COST_VIEWED
+```
+
+### 요청 예
 
 ```json
 {
@@ -219,38 +209,58 @@ POST /api/analytics/events
 }
 ```
 
-서버 규칙:
+### 응답
+
+- `ITEM_REGISTRATION_STARTED`: `201 { "eventId": "..." }`
+- 나머지 성공: `204 No Content`
+
+### 서버 검증
 
 1. `requireUser`
-2. 이벤트 타입 allowlist 확인
-3. itemId가 필요하면 `getOwnedItem`으로 소유권 검증
-4. 이벤트별 허용 필드 외 입력 reject
-5. 이벤트 저장
-6. `204 No Content`
+2. 클라이언트 허용 타입 확인
+3. 이벤트별 payload exact schema 확인
+4. itemId가 필요한 이벤트면 `getOwnedItem`
+5. `userId`와 `occurredAt`은 서버가 결정
+6. no-store 응답
 
-클라이언트는 `userId`, `occurredAt`을 보낼 수 없다. 서버가 현재 인증 사용자와 서버 시간을 사용한다.
+클라이언트는 다음 필드를 보낼 수 없다.
 
-## 7. 서버 이벤트 기록 인터페이스
+- `userId`
+- `occurredAt`
+- `durationMs`
+- 임의 metadata
 
-```ts
-recordProductEvent(input): Promise<void>
-```
-
-원칙:
-
-- 도메인 API 성공 후 호출한다.
-- 이벤트 기록 실패는 catch하여 운영 로그만 남긴다.
-- 이벤트 저장 함수는 비즈니스 도메인 row를 수정할 수 없다.
-
-중복이 중요한 이벤트에는 별도 idempotency helper를 제공한다.
+## 7. 서버 이벤트 인터페이스
 
 ```ts
-recordProductEventOnce({ userId, itemId, type })
+recordProductEvent(input): Promise<ProductEvent>
+recordProductEventOnce(input): Promise<ProductEvent | null>
+recordProductEventNonBlocking(input): Promise<void>
 ```
 
-DB unique constraint 또는 transaction-safe existence check로 중복을 막는다.
+역할:
 
-## 8. 퍼널 정의
+- `recordProductEvent`: 검증 완료된 내부 이벤트 저장
+- `recordProductEventOnce`: milestone 중복 억제
+- `recordProductEventNonBlocking`: 핵심 도메인 성공 후 이벤트 실패를 삼키고 안전한 로그만 기록
+
+로그에 자유 텍스트 payload를 남기지 않는다.
+
+## 8. Idempotency
+
+최초 1회가 중요한 이벤트:
+
+- `RESALE_STARTED`
+- `RESALE_COMPLETED`
+
+일 단위 중복 억제:
+
+- `APP_VISITED`: user + KST date
+- `USAGE_COST_VIEWED`: user + item + KST date
+
+V1 구현은 별도 milestone 테이블을 만들지 않는다. PostgreSQL/Prisma에서 무리 없는 unique 전략을 우선 사용하고, partial unique가 구조를 과도하게 복잡하게 만들면 transaction-safe existence check로 시작한다.
+
+## 9. 퍼널 정의
 
 ### Funnel A — 첫 물건 등록
 
@@ -262,25 +272,22 @@ DB unique constraint 또는 transaction-safe existence check로 중복을 막는
 
 지표:
 - completion rate
-- 완료 사용자의 `durationMs` median / p75
+- valid `durationMs` median / p75
 
-시장 검증 목표:
-- completion rate >= 70%
-- median duration <= 180,000ms
+초기 성공 기준:
+- completion >= 70%
+- median <= 180,000ms
 
 ### Funnel B — 재방문
 
-cohort 기준:
-- 사용자 최초 `ITEM_REGISTRATION_COMPLETED` 날짜
+cohort:
+- 사용자 최초 `ITEM_REGISTRATION_COMPLETED` KST 날짜
 
-D7 retained:
-- 최초 등록일 +7일 기준 허용 window에 `APP_VISITED` 존재
-
-V1 권장 window:
+retention window:
 - D7: day 6~8
 - D30: day 27~33
 
-정확한 calendar-day cohort는 KST 기준으로 계산한다.
+해당 window에 `APP_VISITED`가 있으면 retained로 본다.
 
 ### Funnel C — 장기 관리 행동
 
@@ -288,44 +295,42 @@ V1 권장 window:
 - 물건 등록 완료 사용자
 
 분자:
-- 등록 이후 `ITEM_LIFECYCLE_UPDATED`가 1건 이상 존재하는 사용자
+- 이후 `ITEM_LIFECYCLE_UPDATED` 1회 이상 사용자
 
 보조 지표:
-- 첫 lifecycle update까지 걸린 일수
+- 첫 lifecycle update까지 경과 일수
 
 ### Funnel D — 판매 준비
 
-분모:
-- 등록된 item
+item 기준 단계:
 
-단계:
 1. `RESALE_STARTED`
 2. `RESALE_COMPLETED`
 3. `RESALE_COPY_COPIED`
 4. `SALE_COMPLETED`
 
 지표:
-- 단계별 전환율
-- resale start → completion 시간
-- completion → copy 비율
-- copy → actual sale 비율
+- 단계별 conversion
+- start → complete 시간
+- complete → copy 비율
+- copy → sale 비율
 
-### Funnel E — 판매 완료 후 가치
+### Funnel E — 판매 후 가치
 
 분모:
 - `SALE_COMPLETED`
 
 분자:
-- `USAGE_COST_VIEWED`
+- 해당 item의 `USAGE_COST_VIEWED`
 
 지표:
-- 사용비 리포트 조회율
+- 판매 완료 후 사용비 리포트 조회율
 
-## 9. 내부 리포트
+## 10. 집계 모듈
 
-V1에서는 사용자에게 analytics dashboard를 노출하지 않는다.
+사용자에게 analytics dashboard는 만들지 않는다.
 
-관리/운영용 집계 함수만 구현한다.
+내부 함수만 구현한다.
 
 ```text
 getRegistrationFunnel(range)
@@ -335,54 +340,46 @@ getResaleFunnel(range)
 getPostSaleReportEngagement(range)
 ```
 
-초기 구현은 SQL/Prisma aggregation + 테스트 가능한 순수 계산 함수 조합을 권장한다.
+구조:
+- Prisma/SQL로 최소 row 집합 조회
+- 테스트 가능한 순수 계산 함수에서 conversion/median/cohort 계산
 
-관리 API나 UI는 별도 승인 전에는 만들지 않는다. 필요할 때 read-only admin surface로 분리한다.
+관리 API/UI는 별도 승인 대상이다.
 
-## 10. 개인정보 및 보안 경계
+## 11. 개인정보/보안 경계
 
-절대 이벤트에 저장하지 않는 값:
+ProductEvent에 절대 저장하지 않는 값:
 
-- 이름
-- 이메일
-- 전화번호
-- 주소
-- 주문번호
-- 카드 정보
-- 영수증 원본 및 OCR 텍스트
-- 제품명 자유 텍스트
-- 브랜드/모델/구매처 자유 텍스트
+- 이름/이메일/전화번호/주소
+- 주문번호/카드 정보
+- 영수증 원본/OCR 결과
+- 제품명/브랜드/모델/구매처 자유 텍스트
 - 구성품명
 - 하자/수리 메모
-- 생성된 판매글
-- 외부 중고 플랫폼 계정 정보
+- 생성 판매글
+- 외부 플랫폼 계정 정보
 
-허용되는 식별자:
-
-- 내부 userId
-- 내부 itemId
+허용 식별자:
+- 내부 `userId`
+- 내부 `itemId`
 
 보안:
+- 사용자 이벤트 조회 public API 없음
+- 이벤트 생성 endpoint만 노출
+- 다른 사용자 itemId는 기존 ownership 정책과 동일하게 거부
+- analytics response `Cache-Control: no-store`
 
-- 사용자 이벤트 조회용 public API를 V1에 만들지 않는다.
-- 클라이언트 이벤트 endpoint는 현재 사용자의 이벤트 생성만 가능하다.
-- 다른 사용자 itemId를 넣으면 기존 ownership 정책과 동일하게 not-found/denied 처리한다.
-- analytics response를 캐시하지 않는다.
+## 12. 데이터 보존
 
-## 11. 데이터 보존
+- raw ProductEvent 보존 목표: 180일
+- 사용자 계정 삭제 시 연결된 raw ProductEvent 삭제
+- 장기 보존이 필요하면 추후 비식별 aggregate로 전환
 
-초기 기본값:
-- ProductEvent raw row: 180일
-- 장기 cohort 판단에 필요한 집계치는 추후 비식별 aggregate로 전환 가능
+자동 retention job은 이번 구현 범위에 넣지 않는다. 단, 운영 출시 전 정기 삭제 절차가 반드시 마련되어야 한다.
 
-V1에서는 자동 삭제 job까지 구현하지 않아도 되지만, schema와 문서에는 180일 정책을 명시한다. 실제 운영 배포 전에 retention job 또는 정기 정리 절차가 있어야 한다.
+## 13. 인덱스
 
-사용자가 계정을 삭제할 때:
-- userId에 연결된 raw ProductEvent는 함께 삭제한다.
-
-## 12. 데이터베이스 인덱스
-
-필수 인덱스 후보:
+기본 후보:
 
 ```text
 (userId, occurredAt)
@@ -390,101 +387,106 @@ V1에서는 자동 삭제 job까지 구현하지 않아도 되지만, schema와 
 (itemId, type, occurredAt)
 ```
 
-idempotent 이벤트를 위해 필요한 경우 partial/compound unique 전략을 사용한다.
+일 단위 중복 억제 구현에 필요하면 별도 `eventDateKst` 컬럼을 추가할 수 있다. 추가 시 server-derived date만 저장하고 클라이언트 입력은 금지한다.
 
-예:
-- item당 최초 `RESALE_COMPLETED` 1회
-
-Prisma/PostgreSQL 제약 한계 때문에 partial unique가 복잡하면 `ProductEventMilestone` 같은 별도 테이블을 만들지 말고, 우선 transaction 내 existence check + 테스트로 충분한지 검토한다. 새 테이블은 실제 race 문제가 확인될 때만 추가한다.
-
-## 13. 데이터 흐름
+## 14. 데이터 흐름
 
 ### 첫 등록
 
 ```text
-/items/new render
-  -> client analytics ITEM_REGISTRATION_STARTED
-  -> user submits
-  -> POST /api/items
-  -> Item create success
-  -> record ITEM_REGISTRATION_COMPLETED
-  -> response
+/items/new mount
+ -> POST analytics ITEM_REGISTRATION_STARTED
+ -> server stores start event and returns eventId
+ -> user submits item + registrationEventId
+ -> Item create success
+ -> server verifies start event
+ -> server calculates duration
+ -> ITEM_REGISTRATION_COMPLETED
+ -> response
+```
+
+### 앱 방문
+
+```text
+AppShell client marker mount
+ -> POST APP_VISITED
+ -> server deduplicates by user + KST date
 ```
 
 ### 판매 준비
 
 ```text
-resale page
-  -> first draft persisted
-  -> RESALE_STARTED once
-  -> steps saved
-  -> generatedText created
-  -> RESALE_COMPLETED once
-  -> user clicks copy
-  -> clipboard success
-  -> POST analytics RESALE_COPY_COPIED
+first resale draft create
+ -> RESALE_STARTED once
+ -> resale steps persist
+ -> generatedText available
+ -> RESALE_COMPLETED once
+ -> clipboard success
+ -> POST RESALE_COPY_COPIED
 ```
 
 ### 판매 완료
 
 ```text
 POST sale
-  -> Sale + Item domain update success
-  -> SALE_COMPLETED
-  -> usage cost report render
-  -> USAGE_COST_VIEWED
+ -> Sale + Item update success
+ -> SALE_COMPLETED
+ -> report/card mounts in browser
+ -> POST USAGE_COST_VIEWED
 ```
 
-## 14. 장애 처리
+## 15. 장애 처리
 
 analytics write 실패:
-- 제품 핵심 요청은 성공 유지
-- `console.error` 또는 기존 server logger로 이벤트 타입과 error class만 기록
-- 이벤트 payload 자유 텍스트는 로그에도 남기지 않는다.
+- 핵심 도메인 응답 성공 유지
+- 이벤트 type과 error class 정도만 서버 로그
+- 자유 텍스트 payload 로그 금지
 
 client analytics endpoint 실패:
-- 사용자에게 오류 toast를 노출하지 않는다.
-- 제품 UX를 방해하지 않는다.
+- 사용자 toast 없음
+- 핵심 UX 방해 없음
 
-DB 장애가 비즈니스 DB와 analytics DB가 동일한 PostgreSQL에서 발생한 경우:
-- 핵심 도메인 DB 작업 자체가 실패하는 것은 기존 API 오류 정책을 따른다.
-- 도메인 성공 후 별도 analytics insert에서 발생한 오류만 non-blocking 처리한다.
+예외:
+- `ITEM_REGISTRATION_STARTED` 저장이 실패하면 `registrationEventId`가 없으므로 등록 duration만 null이 된다. 물건 등록 자체는 정상 진행한다.
 
-## 15. 테스트 전략
+## 16. 테스트 전략
 
 ### Unit
 
-- 이벤트 타입별 payload allowlist
-- duration validation/clamp
-- funnel 계산
-- retention KST calendar date 계산
-- resale 단계 전환 계산
+- client/server event allowlist
+- exact payload schema
+- start event 기반 duration 계산
+- 30분 초과 duration null 처리
+- KST date 계산
+- median/p75
+- retention window
+- resale funnel conversion
 
 ### Integration
 
-- client endpoint는 unauthenticated 401
-- 다른 사용자 itemId event 생성 불가
-- 허용되지 않은 type reject
-- 추가 임의 property reject
-- 제품명/판매글 등 민감 속성 입력 reject
-- item create success 후 completion event 존재
-- resale 최초 완료 후 completion event 1건
-- sale success 후 SALE_COMPLETED 존재
-- analytics insert failure가 핵심 도메인 성공을 되돌리지 않음
+- unauthenticated client event = 401
+- server-only event를 client endpoint로 보내면 reject
+- 임의 property reject
+- cross-user itemId reject
+- 민감 필드 형태 입력 reject
+- item create success 뒤 completion event 존재
+- 잘못된 registrationEventId여도 Item은 생성되고 duration null
+- RESALE_STARTED/COMPLETED 중복 억제
+- sale success 뒤 SALE_COMPLETED 존재
+- analytics insert 실패가 도메인 성공을 롤백하지 않음
 
 ### E2E
 
-1. 신규 사용자 `/items/new`
-2. 첫 물건 등록
-3. DB/검증 endpoint 기준 started + completed 확인
-4. 판매 준비 6단계 완료
-5. 복사 버튼 동작
-6. 판매 완료
-7. 기대 funnel milestone이 모두 기록됨
+1. `/items/new` 진입 → start event
+2. 첫 물건 등록 → completion + duration
+3. lifecycle 정보 변경 → lifecycle event
+4. 판매 준비 → start/complete
+5. clipboard mock 성공 → copy event
+6. 판매 완료 → sale event
+7. 사용비 카드 실제 노출 → viewed event
+8. 기대 funnel milestone 검증
 
-브라우저 테스트에서 Clipboard API는 deterministic mock을 사용한다.
-
-## 16. 기존 코드 변경 예상 범위
+## 17. 예상 변경 파일
 
 ```text
 prisma/schema.prisma
@@ -496,52 +498,55 @@ src/analytics/funnels.ts
 src/analytics/*.test.ts
 app/api/analytics/events/route.ts
 app/api/items/route.ts
+app/api/items/[id]/lifecycle/route.ts
+app/api/items/[id]/components/route.ts
+app/api/items/[id]/maintenance/route.ts
 app/api/items/[id]/resale/route.ts
 app/api/items/[id]/sale/route.ts
+components/app-shell.tsx
 components/form/item-form.tsx
 components/resale/generated-copy.tsx
-components/app-shell.tsx (APP_VISITED 구현 방식에 따라)
+components/usage-cost-card.tsx
 tests/integration/analytics.test.ts
 tests/e2e/product-funnel.spec.ts
 ```
 
-## 17. 릴리스 게이트
+## 18. 릴리스 게이트
 
-다음 조건을 모두 만족해야 merge 후보가 된다.
+1. 자유형 analytics metadata 저장 불가
+2. 민감 도메인 텍스트 저장 위치 없음
+3. cross-user item event 생성 거부
+4. analytics 단독 실패로 핵심 도메인 요청 실패 금지
+5. 등록 duration은 서버 start event 시간으로 계산
+6. RESALE_STARTED/COMPLETED 중복 억제
+7. SALE_COMPLETED는 실제 sale 성공 이후만 기록
+8. APP_VISITED KST 일 단위 중복 억제
+9. unit/integration/E2E 전부 통과
+10. 기존 forbidden marketplace gate 통과
+11. typecheck/build 통과
 
-1. analytics 이벤트는 allowlist 밖 property를 저장할 수 없다.
-2. 민감 도메인 텍스트는 ProductEvent schema에 저장 위치가 없다.
-3. cross-user item event 생성이 거부된다.
-4. 핵심 도메인 요청은 analytics insert 실패만으로 실패하지 않는다.
-5. ITEM_REGISTRATION_COMPLETED는 실제 Item 생성 성공 이후에만 발생한다.
-6. RESALE_COMPLETED는 item당 중복 기록되지 않는다.
-7. SALE_COMPLETED는 실제 Sale 성공 이후 발생한다.
-8. 전체 unit/integration/E2E 테스트가 통과한다.
-9. 기존 forbidden marketplace feature gate가 계속 통과한다.
-10. build/typecheck가 통과한다.
-
-## 18. Agent 판단
+## 19. Agent 판단
 
 ### PM
 
-현재 단계에서 더 많은 기능보다 퍼널을 측정할 수 있는 것이 중요하다. 단, 계측 자체가 제품보다 커져서는 안 된다.
+기능 추가보다 검증 가능한 퍼널 확보가 먼저다. 계측 자체는 제품보다 작게 유지한다.
 
 ### Backend
 
-기존 PostgreSQL과 Prisma를 재사용한다. 별도 analytics service나 message queue는 현재 트래픽과 검증 단계에 과도하다.
+기존 PostgreSQL/Prisma를 재사용한다. 별도 analytics service나 queue는 현재 단계에 과도하다.
 
 ### Frontend
 
-클라이언트 이벤트는 클라이언트에서만 알 수 있는 행동으로 제한한다. 자동 클릭 추적은 도입하지 않는다.
+클라이언트 이벤트는 브라우저에서만 확인할 수 있는 행동으로 제한한다.
 
 ### Security
 
-자유형 JSON metadata를 금지한다. 영수증/판매글 등 민감 데이터가 이벤트로 유출될 가능성을 스키마 수준에서 차단한다.
+자유형 metadata를 금지하고 민감 데이터 유입을 schema 수준에서 차단한다.
 
 ### Code Review
 
-이벤트가 많아지는 것을 성공으로 보지 않는다. V1 시장 검증 질문에 답하지 못하는 이벤트는 추가하지 않는다.
+시장 검증 질문에 답하지 못하는 이벤트는 추가하지 않는다.
 
 ### Orchestrator
 
-`1st-party + allowlist + server-trusted completion + non-blocking analytics`를 구현 원칙으로 확정한다.
+`1st-party + allowlist + server-trusted completion + non-blocking analytics`를 최종 원칙으로 확정한다.
