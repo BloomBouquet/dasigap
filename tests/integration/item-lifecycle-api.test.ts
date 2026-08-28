@@ -8,6 +8,7 @@ import { GET as GET_MAINTENANCE, POST as POST_MAINTENANCE } from "../../app/api/
 const DEV_USER_HEADER = "x-dasigap-dev-user";
 const OWNER = "t6-owner";
 const OTHER = "t6-other";
+const USERS = [OWNER, OTHER];
 
 function request(url: string, init: RequestInit = {}, userId = OWNER) {
   const headers = new Headers(init.headers);
@@ -32,15 +33,28 @@ async function createFixture() {
   });
 }
 
+async function lifecycleEventTypes(itemId: string) {
+  const events = await prisma.productEvent.findMany({
+    where: { userId: OWNER, itemId },
+    orderBy: { createdAt: "asc" },
+  });
+  return events.map((event) => String(event.type));
+}
+
 describe("item lifecycle supporting APIs", () => {
   beforeEach(async () => {
     vi.stubEnv("AUTH_MODE", "dev");
     vi.stubEnv("NODE_ENV", "test");
-    await prisma.item.deleteMany({ where: { userId: { in: [OWNER, OTHER] } } });
+    await prisma.productEvent.deleteMany({ where: { userId: { in: USERS } } });
+    await prisma.item.deleteMany({ where: { userId: { in: USERS } } });
   });
 
   afterEach(() => vi.unstubAllEnvs());
-  afterAll(async () => prisma.$disconnect());
+  afterAll(async () => {
+    await prisma.productEvent.deleteMany({ where: { userId: { in: USERS } } });
+    await prisma.item.deleteMany({ where: { userId: { in: USERS } } });
+    await prisma.$disconnect();
+  });
 
   it("stores explicit return and warranty dates without timezone date shifting", async () => {
     const item = await createFixture();
@@ -75,6 +89,7 @@ describe("item lifecycle supporting APIs", () => {
         warranty: { startsAt: "2026-08-20", endsAt: "2027-08-19" },
       },
     });
+    expect(await lifecycleEventTypes(item.id)).toEqual(["ITEM_LIFECYCLE_UPDATED"]);
   });
 
   it("mutates a component checklist only for the owner", async () => {
@@ -123,6 +138,10 @@ describe("item lifecycle supporting APIs", () => {
       context(item.id),
     );
     expect(crossUserResponse.status).toBe(404);
+    expect(await lifecycleEventTypes(item.id)).toEqual([
+      "ITEM_LIFECYCLE_UPDATED",
+      "ITEM_LIFECYCLE_UPDATED",
+    ]);
   });
 
   it("adds and lists allowed maintenance history while hiding cross-user existence", async () => {
@@ -161,5 +180,6 @@ describe("item lifecycle supporting APIs", () => {
       context(item.id),
     );
     expect(crossUserResponse.status).toBe(404);
+    expect(await lifecycleEventTypes(item.id)).toEqual(["ITEM_LIFECYCLE_UPDATED"]);
   });
 });
