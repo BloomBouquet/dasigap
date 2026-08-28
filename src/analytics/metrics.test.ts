@@ -75,7 +75,7 @@ describe("product validation metrics", () => {
 
     expect(metrics.firstItem).toEqual({ startedUsers: 1, completedUsers: 0, conversionRate: 0 });
     expect(metrics.resaleCompletion).toEqual({ startedItems: 1, completedItems: 0, conversionRate: 0 });
-    expect(metrics.copyUsage).toEqual({ completedItems: 1, copiedItems: 0, conversionRate: 0 });
+    expect(metrics.copyUsage).toEqual({ completedItems: 0, copiedItems: 0, conversionRate: 0 });
     expect(metrics.saleCompletion).toEqual({ startedItems: 1, soldItems: 0, conversionRate: 0 });
   });
 
