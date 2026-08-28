@@ -11,7 +11,8 @@ export async function GET(request: Request) {
       url.searchParams.get("code"),
       url.searchParams.get("state"),
     );
-    const location = new URL(result.returnTo, url.origin);
+    const registeredRedirectUri = process.env.BOUQUET_AUTH_REDIRECT_URI!;
+    const location = new URL(result.returnTo, new URL(registeredRedirectUri).origin);
     return new Response(null, {
       status: 302,
       headers: {
