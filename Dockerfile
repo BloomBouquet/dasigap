@@ -11,6 +11,10 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY prisma/schema.prisma ./prisma/schema.prisma
 RUN pnpm install --frozen-lockfile
 
+FROM deps AS migrator
+COPY prisma ./prisma
+CMD ["pnpm", "prisma", "migrate", "deploy"]
+
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

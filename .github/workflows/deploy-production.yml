@@ -1,0 +1,109 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: "40-character main commit SHA to deploy"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: dasigap-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      IMAGE_SHA: ${{ inputs.image_sha }}
+      GHCR_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate deployment input
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$IMAGE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_sha must be exactly 40 lowercase hex characters" >&2
+            exit 2
+          fi
+
+          git fetch --no-tags --depth=100 origin main
+          if ! git merge-base --is-ancestor "$IMAGE_SHA" origin/main; then
+            echo "image_sha must refer to a commit reachable from main" >&2
+            exit 1
+          fi
+
+      - name: Configure pinned SSH host verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Stage immutable deployment tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS=(
+            -i "$HOME/.ssh/id_ed25519"
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o BatchMode=yes
+          )
+
+          ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            'mkdir -p /opt/dasigap/deploy /opt/dasigap/state'
+
+          scp "${SSH_OPTS[@]}" \
+            deploy/compose.production.yml \
+            deploy/deploy.sh \
+            deploy/rollback.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:/opt/dasigap/deploy/"
+
+          ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            'chmod 700 /opt/dasigap/deploy/deploy.sh /opt/dasigap/deploy/rollback.sh'
+
+      - name: Deploy immutable release on server
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS=(
+            -i "$HOME/.ssh/id_ed25519"
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o BatchMode=yes
+          )
+
+          cleanup_registry_auth() {
+            ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+              'docker logout ghcr.io >/dev/null 2>&1 || true' || true
+          }
+          trap cleanup_registry_auth EXIT
+
+          printf '%s' "$GHCR_TOKEN" | ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io -u '$GITHUB_ACTOR' --password-stdin"
+
+          ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd /opt/dasigap && ./deploy/deploy.sh 'sha-$IMAGE_SHA'"
