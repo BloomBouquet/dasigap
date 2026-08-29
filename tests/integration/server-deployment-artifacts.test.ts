@@ -54,15 +54,19 @@ describe("server deployment artifacts", () => {
     expect(script).not.toContain("latest");
   });
 
-  it("rolls application code back without attempting a database downgrade", () => {
+  it("rolls application code back through the shared candidate boundary without database downgrade", () => {
     const script = read("deploy/rollback.sh");
+    const common = read("deploy/release-common.sh");
 
-    expect(script).toContain("previous-image");
-    expect(script).toContain("docker compose");
-    expect(script).toContain("/api/health");
-    expect(script).not.toContain("migrate reset");
-    expect(script).not.toContain("migrate resolve");
-    expect(script).not.toContain("migrate down");
+    expect(common).toContain('STATE_FILE="$STATE_DIR/previous-image"');
+    expect(common).toContain("validate_candidate");
+    expect(common).toContain("recreate_production");
+    expect(common).toContain("restore_production");
+    expect(script).toContain("validate_candidate");
+    expect(script).toContain("--restore-previous-or-stop");
+    expect(script).toContain("restore_production");
+    expect(script).not.toContain("migrate-sha-");
+    expect(script).not.toContain("prisma migrate");
   });
 
   it("proxies HTTPS traffic only to the loopback application port", () => {
