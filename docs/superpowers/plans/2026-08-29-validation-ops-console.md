@@ -286,7 +286,7 @@ Change the function boundary:
 export function computeValidationMetrics(events: ValidationEvent[], now: Date) {
   const observationDate = kstDateKey(now);
   const cohorts = firstRegistrationDates(events);
-  // ...existing first-item/resale/lifecycle logic remains unchanged...
+  // existing first-item/resale/lifecycle logic remains unchanged
 
   let d7EligibleUsers = 0;
   let d7Users = 0;
@@ -311,7 +311,7 @@ export function computeValidationMetrics(events: ValidationEvent[], now: Date) {
   }
 
   return {
-    // ...
+    // existing metric groups
     retention: {
       d7EligibleUsers,
       d7Users,
@@ -578,27 +578,28 @@ Modify `components/app-shell.tsx`:
 
 ```ts
 const isInternalPage = pathname.startsWith("/internal/");
-```
-
-Keep session checking for internal pages. Build login returnTo from current local pathname:
-
-```ts
 const returnTo = isPublicLegalPage ? "/" : pathname;
 const loginHref = `/auth/bouquet/start?returnTo=${encodeURIComponent(returnTo)}`;
 ```
 
-For authenticated render:
+Use `loginHref` in the anonymous-state Bouquet login link. Keep session checking on internal pages.
+
+For authenticated render, preserve legal links and logout while excluding only product analytics/navigation:
 
 ```tsx
 <div className={isInternalPage ? "app-shell internal-app-shell" : "app-shell"}>
   {!isInternalPage && <AppVisitTracker />}
   <div className="app-shell-content">{children}</div>
-  <LegalLinks />
+  <footer className="legal-footer">
+    <Link href="/privacy">개인정보처리방침</Link>
+    <Link href="/terms">이용약관</Link>
+    <button type="button" onClick={signOut}>로그아웃</button>
+  </footer>
   {!isInternalPage && <BottomNav />}
 </div>
 ```
 
-Keep logout available in the authenticated footer. Do not rely on this UI condition for authorization; server guard remains authoritative.
+Do not rely on this UI condition for authorization; server guard remains authoritative.
 
 - [ ] **Step 4: Add minimal internal styles**
 
@@ -714,7 +715,7 @@ test("authenticated non-admin sees denial and no metrics", async ({ page }) => {
 
 - [ ] **Step 3: Lock the no-APP_VISITED behavior at the network boundary**
 
-In the admin test, register a route observer before `goto`:
+In the admin test, register a request observer before `goto`:
 
 ```ts
 const eventRequests: string[] = [];
@@ -812,43 +813,7 @@ Expected: all commands PASS. GitHub Actions must also PASS the pinned real MinIO
 
 - [ ] **Step 3: Write release evidence**
 
-Create `docs/release/validation-ops-console-checklist.md` after the final CI run is known. It must record:
-
-```md
-# Validation Ops Console Release Checklist
-
-- Branch: `dasigap/validation-ops`
-- Verified head: `<actual final SHA>`
-- GitHub Actions run: `<actual run id>`
-- Result: PASS
-
-## Access Boundary
-- [x] unauthenticated -> 401
-- [x] non-admin -> 403
-- [x] missing allowlist -> 503 fail-closed
-- [x] allowlisted admin -> aggregate metrics only
-
-## Privacy
-- [x] raw ProductEvent is not exposed
-- [x] raw userId/itemId is not returned
-- [x] internal visit does not create APP_VISITED
-- [x] Cache-Control is private, no-store
-
-## Retention Definition
-- [x] cohort starts at first ITEM_REGISTRATION_COMPLETED KST date
-- [x] D7 window is +6..+8 with eligibility at +8
-- [x] D30 window is +27..+33 with eligibility at +33
-
-## Verification
-- [x] Prisma validate/migrate
-- [x] typecheck
-- [x] Vitest full suite
-- [x] real MinIO S3 integration
-- [x] production build
-- [x] Playwright full suite
-```
-
-Replace angle-bracket values with actual evidence before commit; never commit placeholders.
+Create `docs/release/validation-ops-console-checklist.md` only after the final CI run is known. It must contain the actual branch SHA/run id and these checked sections: access boundary, privacy, retention definition, Prisma/typecheck/Vitest/MinIO/build/Playwright verification. Do not create the file with placeholder values.
 
 - [ ] **Step 4: Commit the verified release checklist**
 
@@ -921,11 +886,12 @@ Task 2 retention fix ─────┘                         │
 Task 4 console/AppShell ────────────────────────────┘
 ```
 
-Execution order is `1 -> 2 -> 3 -> 4 -> 5 -> 6`. Task 4 may start after Task 3's response DTO is fixed, but keep sequential execution in this branch so each commit has one reviewable responsibility.
+Execution order is `1 -> 2 -> 3 -> 4 -> 5 -> 6`. Task 4 starts after Task 3 fixes the response DTO; keep sequential execution so each commit has one reviewable responsibility.
 
 ## Self-Review
 
 - Spec coverage: access model, fail-closed behavior, aggregate-only API, internal UI, AppShell analytics isolation, safe returnTo, D7/D30 cohort correction, privacy, failure handling, and release gates each map to a concrete task.
-- Placeholder scan: implementation steps contain no TBD/TODO. The release checklist section explicitly requires actual SHA/run values before the file is created.
+- Placeholder scan: implementation steps contain no TBD/TODO. Release evidence is deliberately created only after actual SHA/run values exist, so no placeholder checklist is committed.
 - Type consistency: `requireValidationAdmin`, `computeValidationMetrics(events, now)`, `d7EligibleUsers`, `d30EligibleUsers`, and `/api/internal/validation` names are consistent across tasks.
+- Auth-shell consistency: internal routes retain session checking, legal links, and logout; only `AppVisitTracker` and `BottomNav` are suppressed.
 - Scope: no DB migration, external SDK, role table, raw event endpoint, export, date filters, or V1.1 user feature is introduced.
