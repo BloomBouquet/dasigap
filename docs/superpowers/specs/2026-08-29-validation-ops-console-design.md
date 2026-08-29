@@ -320,9 +320,9 @@ app/api/internal/validation/route.ts
 app/internal/validation/page.tsx
 components/internal/validation-console.tsx
 components/app-shell.tsx
-app/app-shell.css or app/globals.css
- tests/integration/internal-validation.test.ts
- tests/e2e/internal-validation.spec.ts
+app/app-shell.css
+tests/integration/internal-validation.test.ts
+tests/e2e/internal-validation.spec.ts
 ```
 
 추가 DB migration은 예상하지 않는다.
