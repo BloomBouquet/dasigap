@@ -12,6 +12,8 @@ import {
 
 export const runtime = "nodejs";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export async function GET(request: Request): Promise<Response> {
   try {
     const user = await requireUser(request);
@@ -37,7 +39,10 @@ export async function POST(request: Request): Promise<Response> {
     const completedAt = new Date();
     let durationMs: number | null = null;
 
-    if (typeof registrationStartEventId === "string") {
+    if (
+      typeof registrationStartEventId === "string" &&
+      UUID.test(registrationStartEventId)
+    ) {
       try {
         durationMs = await resolveRegistrationDurationMs(
           user.userId,
