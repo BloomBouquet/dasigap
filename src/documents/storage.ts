@@ -82,15 +82,21 @@ function encodePath(value: string) {
     .join("/");
 }
 
-function objectUrl(config: StorageConfiguration, storageKey: string) {
+function bucketUrl(config: StorageConfiguration) {
   const url = new URL(config.endpoint.toString());
   const base = url.pathname.replace(/\/$/, "");
-  url.pathname = `${base}/${encodeURIComponent(config.bucket)}/${encodePath(storageKey)}`;
+  url.pathname = `${base}/${encodeURIComponent(config.bucket)}`;
+  return url;
+}
+
+function objectUrl(config: StorageConfiguration, storageKey: string) {
+  const url = bucketUrl(config);
+  url.pathname = `${url.pathname}/${encodePath(storageKey)}`;
   return url;
 }
 
 function signedHeadersForRequest(
-  method: "PUT" | "DELETE",
+  method: "PUT" | "DELETE" | "HEAD",
   url: URL,
   body: Uint8Array,
   contentType?: string,
@@ -180,6 +186,15 @@ function presignS3(storageKey: string, ttlSeconds: number) {
   params.set("X-Amz-Signature", signature);
   url.search = params.toString();
   return url.toString();
+}
+
+export async function checkObjectStorageReadiness(signal?: AbortSignal): Promise<void> {
+  const config = requireConfiguration();
+  const url = bucketUrl(config);
+  const empty = new Uint8Array();
+  const headers = signedHeadersForRequest("HEAD", url, empty);
+  const response = await fetch(url, { method: "HEAD", headers, signal });
+  if (!response.ok) throw new ObjectStorageOperationError();
 }
 
 export async function putPrivateObject(input: PutPrivateObjectInput): Promise<{ storageKey: string }> {
