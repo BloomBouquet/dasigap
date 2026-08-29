@@ -50,7 +50,7 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 - `dedupeKey`: 서버가 생성하는 제한적 중복 방지 키, 일반 이벤트는 null
 - `createdAt`: 서버 시간
 
-임의 문자열 metadata는 저장하지 않는다.
+임의 문자열 metadata는 저장하지 않는다. `itemId`가 있는 이벤트는 Item FK를 사용하며 물건 삭제 시 함께 cascade 삭제한다.
 
 ## 4. Trust Boundary
 
@@ -89,7 +89,7 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 1. `ItemForm` mount 시 `ITEM_REGISTRATION_STARTED` 요청
 2. 서버가 이벤트를 생성하고 `eventId` 반환
 3. 클라이언트는 물건 등록 요청에 `registrationStartEventId`만 전달
-4. item route는 해당 metadata를 strict 도메인 payload에서 분리
+4. item route는 해당 metadata를 strict 도메인 payload에서 분리하고 UUID 형식이 아니면 무시
 5. 서버는 같은 인증 사용자의 `ITEM_REGISTRATION_STARTED.createdAt`과 완료 서버 시각의 차이로 `durationMs` 계산
 6. 30분을 초과하거나 소유권/타입이 맞지 않으면 `durationMs = null`
 
@@ -136,7 +136,7 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 - Item 상태 `SOLD` 변경
 - `SALE_COMPLETED` 생성
 
-따라서 판매 완료 API가 성공하면 판매 데이터와 분석 이벤트가 원자적으로 존재한다.
+따라서 판매 완료 API가 성공하면 판매 데이터와 분석 이벤트가 원자적으로 존재한다. 반면 180일 retention cleanup은 비핵심 유지보수이므로 판매 트랜잭션 밖에서 best-effort로 수행해 cleanup 실패가 판매 완료를 막지 않게 한다.
 
 ## 10. Usage-cost Event
 
@@ -149,9 +149,11 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 제품 검증용 raw `ProductEvent`에는 180일 보존 기준을 적용한다.
 
 - cutoff: 서버 현재 시각 - 180일
-- 새 서버 이벤트를 기록하기 전에 `createdAt < cutoff` 데이터를 삭제한다.
-- 판매 완료의 서버 트랜잭션에서도 동일 cutoff 정리를 수행한다.
+- 일반 서버 이벤트를 기록하기 전에 `createdAt < cutoff` 데이터를 삭제한다.
+- 판매 완료 경로에서는 실제 판매 트랜잭션 전에 retention 정리를 best-effort로 시도한다.
+- retention 정리 실패는 실제 물건 등록·생애관리·판매 같은 핵심 제품 작업을 실패시키지 않는다.
 - `createdAt` 단독 index를 둬 retention delete 범위를 효율적으로 찾는다.
+- 사용자가 Item을 삭제하면 해당 `itemId`를 가진 item-scoped analytics도 FK cascade로 즉시 삭제한다.
 
 이 방식은 특정 호스팅 사업자나 cron 제품에 의존하지 않으며, 제품이 사용되어 서버 계측이 발생하는 동안 보존기간 초과 데이터가 자동 정리된다.
 
@@ -166,7 +168,8 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 - 광고 식별자/기기 지문 미수집
 - 외부 제품 분석 SDK 미사용 및 CI 회귀 검사
 - 이벤트 API 응답 `Cache-Control: no-store`
-- 분석 실패는 핵심 제품 작업을 막지 않음. 단 `SALE_COMPLETED`는 판매 트랜잭션과 원자적 처리
+- item-scoped analytics는 Item 삭제 시 cascade 삭제
+- 분석 실패는 핵심 제품 작업을 막지 않음. 단 `SALE_COMPLETED` 생성 자체는 판매 데이터와 같은 트랜잭션으로 원자적 처리
 
 개인정보처리방침에 제품 검증용 이용 기록의 항목, 목적, 비수집 정보, 180일 raw-event 보존 기준을 공개한다.
 
@@ -237,10 +240,12 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 - client가 보낸 duration 값 미신뢰
 - KST 서버 일일 방문 dedupe
 - 생애관리 성공 변경만 lifecycle event 생성
-- 판매 완료 트랜잭션과 `SALE_COMPLETED` 원자성
+- 판매 완료 데이터와 `SALE_COMPLETED` 원자성
+- retention cleanup 실패 시에도 판매 완료 가능
 - 사용비 조회 성공 후 server event 생성
 - 판매글 clipboard 성공 시에만 copy event 전송
 - 180일 초과 raw event 자동 삭제
+- Item 삭제 시 item-scoped analytics cascade 삭제
 - metric conversion/median/KST D7/D30/zero denominator 계산
 - 분자 이벤트가 분모 cohort 밖에 있을 때 전환율에서 제외
 - 외부 analytics SDK/package 금지
@@ -260,5 +265,6 @@ MVP 이후 실제 사용자 행동을 검증할 수 있도록 다시값 내부�
 8. client가 userId 또는 서버 전용 성공 이벤트를 위조할 수 없음
 9. cross-user item analytics 기록 불가
 10. raw event 180일 retention 테스트 통과
-11. 외부 analytics SDK 없음
-12. 개인정보처리방침 계측 고지 반영
+11. Item 삭제 시 item-scoped analytics 삭제 확인
+12. 외부 analytics SDK 없음
+13. 개인정보처리방침 계측 고지 반영
