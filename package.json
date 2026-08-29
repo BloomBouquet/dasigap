@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "verify:release-artifact": "vitest run ops/release/create-artifact.test.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev"
   },
