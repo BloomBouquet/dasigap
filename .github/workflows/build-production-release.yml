@@ -1,0 +1,134 @@
+name: Build production release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release-artifact
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dasigap
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dasigap"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/dasigap
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Resolve release SHA
+        id: release
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.24.0 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Validate Prisma schema
+        run: pnpm prisma validate
+
+      - name: Apply database migrations
+        run: pnpm prisma migrate deploy
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit, integration, security, and forbidden-feature tests
+        run: pnpm test
+
+      - name: Start S3-compatible MinIO
+        run: |
+          docker run -d --name dasigap-minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=dasigap-ci \
+            -e MINIO_ROOT_PASSWORD=dasigap-ci-secret \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = "1"
+
+          docker run --rm --network host --entrypoint /bin/sh \
+            minio/mc:RELEASE.2025-08-13T08-35-41Z \
+            -c 'mc alias set ci http://127.0.0.1:9000 dasigap-ci dasigap-ci-secret && mc mb --ignore-existing ci/dasigap-ci'
+
+      - name: Real S3 integration
+        env:
+          RUN_S3_INTEGRATION: "1"
+          OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:9000
+          OBJECT_STORAGE_REGION: us-east-1
+          OBJECT_STORAGE_BUCKET: dasigap-ci
+          OBJECT_STORAGE_ACCESS_KEY_ID: dasigap-ci
+          OBJECT_STORAGE_SECRET_ACCESS_KEY: dasigap-ci-secret
+        run: pnpm exec vitest run tests/integration/s3-storage.test.ts
+
+      - name: Build production app
+        run: pnpm build
+
+      - name: Full Playwright E2E release suite
+        run: pnpm test:e2e
+
+      - name: Create immutable release artifact
+        run: |
+          rm -rf release-output
+          node ops/release/create-artifact.mjs "${{ steps.release.outputs.sha }}" release-output
+
+      - name: Verify packaged release
+        shell: bash
+        run: |
+          sha="${{ steps.release.outputs.sha }}"
+          test -s "release-output/release-metadata.json"
+          test -s "release-output/dasigap-release-${sha}.tgz"
+          node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(m.service!=="dasigap"||m.commitSha!==process.argv[2]) process.exit(1)' release-output/release-metadata.json "$sha"
+          if tar -tzf "release-output/dasigap-release-${sha}.tgz" | grep -E '(^|/)\.env($|\.)'; then
+            echo "release archive must not contain environment files" >&2
+            exit 1
+          fi
+
+      - name: Upload production release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dasigap-production-${{ steps.release.outputs.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: release-output/
