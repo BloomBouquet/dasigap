@@ -2,69 +2,78 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-COMPOSE_FILE="${DASIGAP_COMPOSE_FILE:-$SCRIPT_DIR/compose.production.yml}"
-ENV_FILE="${DASIGAP_ENV_FILE:-/etc/dasigap/dasigap.env}"
-STATE_DIR="${DASIGAP_STATE_DIR:-/opt/dasigap/state}"
-STATE_FILE="$STATE_DIR/previous-image"
-REQUESTED_TAG="${1:-}"
+# shellcheck source=release-common.sh
+. "$SCRIPT_DIR/release-common.sh"
 
-if [ -n "$REQUESTED_TAG" ]; then
-  if ! printf '%s\n' "$REQUESTED_TAG" | grep -q '^sha-[0-9a-f]\{40\}$'; then
-    echo "usage: $0 [sha-<40 lowercase hex git sha>]" >&2
-    exit 2
-  fi
-  TARGET_IMAGE="ghcr.io/bloombouquet/dasigap:$REQUESTED_TAG"
-else
-  if [ ! -r "$STATE_FILE" ]; then
-    echo "previous-image state is not available: $STATE_FILE" >&2
-    exit 1
-  fi
-  TARGET_IMAGE=$(cat "$STATE_FILE")
+REQUESTED="${1:-}"
+RECOVERY_MODE=0
+
+if [ "$REQUESTED" = "--restore-previous-or-stop" ]; then
+  RECOVERY_MODE=1
+  REQUESTED=""
 fi
 
-if ! printf '%s\n' "$TARGET_IMAGE" | grep -q '^ghcr.io/bloombouquet/dasigap:sha-[0-9a-f]\{40\}$'; then
+require_runtime_tools
+CURRENT_IMAGE=$(current_production_image)
+
+if [ -n "$REQUESTED" ]; then
+  if ! require_image_tag "$REQUESTED"; then
+    echo "usage: $0 [sha-<40 lowercase hex git sha>|--restore-previous-or-stop]" >&2
+    exit 2
+  fi
+  TARGET_IMAGE="$REGISTRY_IMAGE:$REQUESTED"
+elif [ -r "$STATE_FILE" ]; then
+  TARGET_IMAGE=$(cat "$STATE_FILE")
+else
+  if [ "$RECOVERY_MODE" -eq 1 ]; then
+    stop_production
+    echo "no previous application is available; failed production application was stopped" >&2
+    exit 0
+  fi
+  echo "previous-image state is not available: $STATE_FILE" >&2
+  exit 1
+fi
+
+if ! require_immutable_image "$TARGET_IMAGE"; then
   echo "rollback target is not an immutable dasigap application image" >&2
   exit 1
 fi
 
-if [ ! -r "$ENV_FILE" ]; then
-  echo "production env file is not readable: $ENV_FILE" >&2
+TARGET_SHA=$(sha_from_immutable_image "$TARGET_IMAGE")
+
+echo "Pulling immutable rollback application..."
+docker pull "$TARGET_IMAGE"
+
+echo "Validating rollback candidate..."
+if ! validate_candidate "$TARGET_IMAGE" "$TARGET_SHA"; then
+  echo "rollback candidate did not satisfy live, ready, and release identity checks" >&2
   exit 1
 fi
 
-command -v docker >/dev/null 2>&1 || {
-  echo "docker is required" >&2
-  exit 1
-}
+if [ "$RECOVERY_MODE" -eq 0 ]; then
+  write_previous_image "$CURRENT_IMAGE"
+fi
 
-docker compose version >/dev/null 2>&1 || {
-  echo "docker compose plugin is required" >&2
-  exit 1
-}
-
-echo "Rolling application code back to $TARGET_IMAGE"
-docker pull "$TARGET_IMAGE"
-DASIGAP_IMAGE="$TARGET_IMAGE" DASIGAP_ENV_FILE="$ENV_FILE" \
-  docker compose -f "$COMPOSE_FILE" up -d --no-deps --force-recreate dasigap
-
-healthy=0
-attempt=1
-while [ "$attempt" -le 30 ]; do
-  if docker exec dasigap node -e "fetch('http://127.0.0.1:3000/api/health',{cache:'no-store'}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))" >/dev/null 2>&1; then
-    healthy=1
-    break
+echo "Switching production application to rollback target..."
+if ! recreate_production "$TARGET_IMAGE" >/dev/null; then
+  echo "rollback production replacement failed" >&2
+  if [ -n "$CURRENT_IMAGE" ] && [ "$CURRENT_IMAGE" != "$TARGET_IMAGE" ]; then
+    restore_production "$CURRENT_IMAGE" >/dev/null 2>&1 || true
   fi
-  sleep 1
-  attempt=$((attempt + 1))
-done
+  exit 1
+fi
 
-if [ "$healthy" -ne 1 ]; then
-  echo "rollback application container did not become healthy" >&2
-  docker logs --tail 100 dasigap >&2 || true
-  DASIGAP_IMAGE="$TARGET_IMAGE" DASIGAP_ENV_FILE="$ENV_FILE" \
-    docker compose -f "$COMPOSE_FILE" stop dasigap >/dev/null 2>&1 || true
+if ! verify_container_health "$PRODUCTION_CONTAINER" "$TARGET_SHA"; then
+  echo "rollback target failed post-switch verification" >&2
+  if [ -n "$CURRENT_IMAGE" ] && [ "$CURRENT_IMAGE" != "$TARGET_IMAGE" ]; then
+    if ! restore_production "$CURRENT_IMAGE"; then
+      echo "original application restoration also failed" >&2
+    fi
+  else
+    stop_production
+  fi
   exit 1
 fi
 
 echo "application rollback healthy: $TARGET_IMAGE"
-echo "database schema is intentionally left at its current forward-migrated version"
+echo "database schema is intentionally left at its current forward-compatible version"
