@@ -49,6 +49,8 @@ describe("protected production workflows", () => {
 
     expect(deploy).toContain("^[0-9a-f]{40}$");
     expect(rollback).toContain("^[0-9a-f]{40}$");
+    expect(deploy).toContain("fetch-depth: 0");
+    expect(rollback).toContain("fetch-depth: 0");
     expect(deploy).toContain('git merge-base --is-ancestor "$IMAGE_SHA" origin/main');
     expect(rollback).toContain('git merge-base --is-ancestor "$IMAGE_SHA" origin/main');
 
