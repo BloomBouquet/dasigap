@@ -6,6 +6,8 @@ DASIGAP_RELEASES="$DASIGAP_ROOT/releases"
 DASIGAP_SHARED="$DASIGAP_ROOT/shared"
 PM2_BIN="${PM2_BIN:-pm2}"
 CURL_BIN="${CURL_BIN:-curl}"
+HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-20}"
+HEALTH_SLEEP_SECONDS="${HEALTH_SLEEP_SECONDS:-1}"
 
 require_full_sha() {
   [[ "${1:-}" =~ ^[0-9a-f]{40}$ ]] || {
@@ -42,7 +44,9 @@ require_release_identity() {
 }
 
 atomic_link() {
-  local target="$1" link="$2" temp="${link}.tmp.$$"
+  local target="$1"
+  local link="$2"
+  local temp="${link}.tmp.$$"
   rm -f "$temp"
   ln -s "$target" "$temp"
   mv -Tf "$temp" "$link"
@@ -73,8 +77,9 @@ load_production_env() {
 wait_for_health() {
   local url="$1" sha="$2" expected_status="$3" body
   require_full_sha "$sha" || return $?
+  [[ "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || return 64
 
-  for _attempt in $(seq 1 20); do
+  for _attempt in $(seq 1 "$HEALTH_ATTEMPTS"); do
     if body="$("$CURL_BIN" --fail --silent --show-error --max-time 3 "$url" 2>/dev/null)"; then
       if printf '%s' "$body" | node -e '
         let body="";
@@ -92,7 +97,9 @@ wait_for_health() {
         return 0
       fi
     fi
-    sleep 1
+    if [[ "$_attempt" -lt "$HEALTH_ATTEMPTS" ]]; then
+      sleep "$HEALTH_SLEEP_SECONDS"
+    fi
   done
 
   echo "health verification failed" >&2
