@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { createReleaseMetadata, validateCommitSha } from "./create-artifact.mjs";
+import {
+  createReleaseMetadata,
+  releasePaths,
+  validateCommitSha,
+} from "./create-artifact.mjs";
 
 describe("production artifact metadata", () => {
   it("accepts only a full commit SHA", () => {
@@ -18,5 +22,23 @@ describe("production artifact metadata", () => {
       nodeMajor: 22,
       packageManager: "pnpm@11.24.0",
     });
+  });
+
+  it("packages an explicit allowlist without environment files", () => {
+    expect(releasePaths).toEqual([
+      ".next",
+      "app",
+      "components",
+      "public",
+      "src",
+      "prisma",
+      "ops",
+      "package.json",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      "next.config.ts",
+      "release-metadata.json",
+    ]);
+    expect(releasePaths.some((path) => /(^|\/)\.env($|\.)/.test(path))).toBe(false);
   });
 });
