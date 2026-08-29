@@ -4,6 +4,7 @@ import { securityHeaders } from "./src/shared/security";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  output: "standalone",
   allowedDevOrigins: ["127.0.0.1"],
   async headers() {
     return [
