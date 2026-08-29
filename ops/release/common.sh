@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-DASIGAP_ROOT="${DASIGAP_ROOT:-/home/ubuntu/dasigap}"
+export DASIGAP_ROOT="${DASIGAP_ROOT:-/home/ubuntu/dasigap}"
 DASIGAP_RELEASES="$DASIGAP_ROOT/releases"
 DASIGAP_SHARED="$DASIGAP_ROOT/shared"
 PM2_BIN="${PM2_BIN:-pm2}"
@@ -56,6 +56,18 @@ validate_https_url() {
     echo "invalid production base url" >&2
     return 64
   }
+}
+
+load_production_env() {
+  local env_file="$DASIGAP_SHARED/.env.production"
+  [[ -f "$env_file" ]] || {
+    echo "production environment is missing" >&2
+    return 66
+  }
+  set -a
+  # shellcheck disable=SC1090
+  source "$env_file"
+  set +a
 }
 
 wait_for_health() {
