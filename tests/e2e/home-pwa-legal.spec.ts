@@ -102,7 +102,7 @@ test("exposes the install manifest and legal entry points", async ({ page, reque
   await expect(page.getByRole("heading", { name: "개인정보처리방침" })).toBeVisible();
   await expect(page.getByText("계정 사용자 ID")).toBeVisible();
   await expect(page.getByText("비공개 문서")).toBeVisible();
-  await expect(page.getByText(/삭제/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "삭제" })).toBeVisible();
   await expect(page.getByText(/객체 저장소/)).toBeVisible();
 });
 
