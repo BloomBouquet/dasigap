@@ -1,74 +1,113 @@
 # 다시값 MVP Release Checklist
 
-- Candidate branch: `dasigap/review`
-- Verified candidate head: `c24f0a7d6fe0fe0565459cb6720fe126be81ca60`
-- Release evidence: GitHub Actions CI #190
-- CI run: https://github.com/BloomBouquet/dasigap/actions/runs/33132289496
-- Result: **PASS**
+## MVP feature acceptance baseline
 
-## Design acceptance criteria
+The approved V1 product scope remains unchanged:
 
-| Acceptance criterion | Status | Evidence |
-| --- | --- | --- |
-| 첫 물건 등록 플로우 정상 동작 | PASS | `pnpm test:e2e` → `tests/e2e/first-item.spec.ts` |
-| 각 Item이 현재 로그인 사용자의 소유권으로 격리됨 | PASS | `pnpm test` → ownership/security integration suites; `pnpm test:e2e` → `release-acceptance.spec.ts` User B GET/PATCH 404 |
-| 영수증이 public URL로 노출되지 않음 | PASS | `pnpm test:e2e` → `receipt-privacy.spec.ts`; owner-only short-lived signed access |
-| 영수증 삭제가 object storage까지 반영됨 | PASS | `receipt-privacy.spec.ts`; real S3-compatible MinIO PUT → signed GET → DELETE → GET 404 integration |
-| 보증/반품 계산 테스트 통과 | PASS | `pnpm test` → lifecycle unit/integration tests; `release-acceptance.spec.ts` lifecycle detail E2E |
-| 판매 준비 플로우 정상 완료 | PASS | `pnpm test:e2e` → `resale-flow.spec.ts` |
-| 판매용 결과에 개인정보가 자동 삽입되지 않음 | PASS | `pnpm test` → resale privacy/template tests; `resale-flow.spec.ts` |
-| 외부 플랫폼 자동 로그인/자동 게시 코드가 존재하지 않음 | PASS | `pnpm test` → `tests/integration/forbidden-features.test.ts` production-source scan |
-| 판매 완료 및 실질 사용비 계산 테스트 통과 | PASS | `pnpm test` → sale/report and usage-cost tests; `release-acceptance.spec.ts` COST 79,000원 / PROFIT 20,000원 E2E |
-| 핵심 E2E 시나리오 통과 | PASS | `pnpm test:e2e` → 9/9 Playwright tests PASS in CI #190 |
-| 개인정보처리방침/서비스 이용약관 링크 위치 확보 | PASS | `pnpm test:e2e` → `home-pwa-legal.spec.ts` |
+- purchase record → return/warranty → ownership/repair → resale preparation → external marketplace handoff → actual sale record → effective usage cost
+- no internal marketplace, buyer/seller matching, chat, payment, or escrow
+- no marketplace scraping, unofficial login/post automation, or marketplace credential storage
+- receipts and supporting documents remain private
+- warranty UI remains an estimate based on registered information
 
-## Additional release gates
+The existing unit, integration, security, MinIO, build, and Playwright suites remain the feature acceptance gate.
+
+## Production release automation
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| Frozen dependency installation | PASS | `pnpm install --frozen-lockfile` |
-| Prisma schema and deployed migrations | PASS | `pnpm prisma validate` + `pnpm prisma migrate deploy` |
-| TypeScript strict verification | PASS | `pnpm typecheck` |
-| Unit / integration / security / forbidden-feature suite | PASS | 79 tests PASS; S3 integration intentionally skipped in the normal suite and executed separately against MinIO |
-| Real S3-compatible signed URL semantics | PASS | MinIO server/client pinned in CI; `tests/integration/s3-storage.test.ts` 1/1 PASS |
-| Production build | PASS | `pnpm build` |
-| Full browser release suite | PASS | `pnpm test:e2e` → 9/9 PASS |
+| Liveness endpoint exposes only status + exact release SHA | PASS | `/api/health/live`; integration coverage |
+| Readiness checks PostgreSQL and object storage without creating objects | PASS | `/api/health/ready`; readiness unit/integration + real MinIO HEAD coverage |
+| Immutable SHA-based release artifact | PASS | `ops/release/create-artifact.mjs` + allowlist test |
+| Release artifact excludes environment files | PASS | artifact allowlist test + build workflow archive inspection |
+| Build workflow always packages current `main` SHA | PASS | `.github/workflows/build-production-release.yml` checks out `main` and resolves `git rev-parse HEAD` |
+| Deploy accepts only a successful trusted build-workflow run | PASS | run event/conclusion/path/SHA provenance validation in deploy workflow |
+| Downloaded artifact SHA must match source workflow SHA | PASS | `ops/release/validate-artifact.mjs` + deploy workflow |
+| SSH host trust is pinned | PASS | `PRODUCTION_KNOWN_HOSTS`; no `ssh-keyscan` or disabled host checking |
+| Candidate is validated before `current` mutation | PASS | `validate-candidate.sh` + release operation tests |
+| Production switch is atomic and exact-SHA health checked | PASS | `switch-release.sh` + release operation tests |
+| Post-switch failure restores the prior release | PASS | release operation tests |
+| Manual rollback uses an already installed SHA only | PASS | `rollback-release.sh` + protected rollback workflow |
+| Rollback performs no install or database migration | PASS | rollback script/workflow static boundary tests |
+| Release retention protects current, previous, and three newest extras | PASS | `cleanup-releases.sh` deterministic retention test |
+| Release shell syntax is a CI gate | PASS | `pnpm check:ops` in `.github/workflows/ci.yml` |
 
-## Required E2E scenario coverage
+## Production host contract
 
-1. PASS — first item registration
-2. PASS — item detail lifecycle display
-3. PASS — receipt upload and owner-only access
-4. PASS — resale preparation and copy
-5. PASS — sold record
-6. PASS — report shows usage cost and sale profit correctly
-7. PASS — user B cannot access user A resource
-8. PASS — document deletion removes storage object
+The server layout is fixed to:
 
-## Forbidden-feature review
+```text
+/home/ubuntu/dasigap/
+├── current -> releases/<sha>
+├── previous -> releases/<sha>
+├── releases/<sha>/
+├── shared/.env.production
+└── .staging/<sha>-<deploy-run-id>/
+```
 
-Release remains blocked if production code adds any of the following without a separate approved scope and legal/technical review:
+`shared/.env.production` is host-owned and must never be included in a release artifact. At minimum it must provide the production database, object storage, and Bouquet SSO configuration represented by `.env.example`.
 
-- marketplace password or credential storage
-- automatic marketplace login, posting, or cross-posting
-- Carrot/Bunjang scraping jobs
-- internal buyer/seller chat, payment, or escrow
+The PM2 runtime reads the installed release metadata, injects that exact SHA as `DASIGAP_RELEASE_SHA`, binds Next.js to loopback, and uses the configured production port. Reverse proxy / TLS termination remains outside the application repository.
 
-The current production-source scan reports **PASS** for all four categories.
+## GitHub production environment requirements
 
-## Final verification commands
+Configure a protected GitHub Actions environment named `production` with these secrets before the first deployment:
+
+- `PRODUCTION_HOST`
+- `PRODUCTION_USER`
+- `PRODUCTION_SSH_KEY`
+- `PRODUCTION_KNOWN_HOSTS`
+- `PRODUCTION_BASE_URL` — exact public HTTPS origin
+- `PRODUCTION_SSH_PORT` — optional; defaults to `22`
+
+Recommended repository/environment protection: require an explicit reviewer for the `production` environment so deploy and rollback remain manual release operations.
+
+## Bouquet production SSO prerequisites
+
+Production rollout remains blocked until all of the following are true:
+
+1. Dasigap has a registered Bouquet OAuth client ID.
+2. The exact public HTTPS callback URI is allowlisted by Bouquet.
+3. Host `shared/.env.production` contains `AUTH_MODE=bouquet`, `BOUQUET_AUTH_BASE_URL`, `BOUQUET_AUTH_CLIENT_ID`, `BOUQUET_AUTH_REDIRECT_URI`, and the intended session TTL.
+4. The production database and object storage credentials are installed on the host.
+5. A real browser smoke test completes authorize → callback → project session → protected API → logout.
+
+Do not substitute the older generic `/authorize`, `/token`, `/userinfo`, `BOUQUET_AUTH_APP_ID`, or `/api/auth/...` contract. The current application uses the provider-specific Bouquet routes already implemented on `main`.
+
+## Release procedure after merge
+
+1. Prepare `/home/ubuntu/dasigap/shared/.env.production` and the protected GitHub `production` environment.
+2. Run **Build production release** manually. The workflow packages the current `main` commit into `dasigap-production-<sha>` only after migrations, tests, real MinIO integration, build, and Playwright all pass.
+3. Copy that successful workflow run ID into **Deploy production release**.
+4. Deploy validates run provenance, downloads the exact artifact, validates the artifact SHA, uploads to a unique staging directory, installs dependencies with the frozen lockfile, generates Prisma, applies migrations, and only then installs the immutable release directory.
+5. The candidate release starts on loopback and must pass exact-SHA live/readiness checks before the `current` symlink changes.
+6. After the atomic switch, PM2 reload plus local and external exact-SHA readiness checks must pass. Failure restores the prior `current` release when one exists.
+7. Complete the real Bouquet browser smoke test before declaring the rollout complete.
+
+## Manual rollback
+
+Use **Rollback production release** with a full lowercase commit SHA that is already present under `/home/ubuntu/dasigap/releases/<sha>`.
+
+Rollback intentionally does not download an artifact, install packages, generate Prisma, or run migrations. The target must pass candidate validation before mutation, and post-switch failure restores the release that was current before the rollback attempt.
+
+## Required verification commands
 
 ```bash
 pnpm install --frozen-lockfile
+pnpm db:generate
 pnpm prisma validate
+pnpm prisma migrate deploy
 pnpm typecheck
 pnpm test
+pnpm check:ops
 pnpm build
 pnpm test:e2e
 ```
 
-All required commands exited successfully in CI #190. The dedicated real S3-compatible signed-URL integration also passed before the build and E2E stages.
+CI additionally runs the real S3-compatible MinIO integration before build and E2E.
 
-## Release decision
+## Current release decision
 
-**PASS — 다시값 MVP satisfies the approved V1 release acceptance criteria represented by the current repository test and CI gates.**
+**CODE READY / PRODUCTION ROLLOUT BLOCKED.**
+
+The repository has the production health, immutable artifact, deploy, atomic switch, rollback, and retention boundaries required for release. Actual production deployment must not be marked complete until the protected production secrets, host environment, exact HTTPS origin, Bouquet OAuth client/callback registration, and real browser smoke test are completed.
