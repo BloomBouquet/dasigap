@@ -1,5 +1,5 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -9,6 +9,9 @@ const TARGET_SHA = "2".repeat(40);
 const TARGET_TAG = `sha-${TARGET_SHA}`;
 const TARGET_IMAGE = `ghcr.io/bloombouquet/dasigap:${TARGET_TAG}`;
 const PREVIOUS_IMAGE = `ghcr.io/bloombouquet/dasigap:sha-${"1".repeat(40)}`;
+const ROLLBACK_SHA = "4".repeat(40);
+const ROLLBACK_TAG = `sha-${ROLLBACK_SHA}`;
+const ROLLBACK_IMAGE = `ghcr.io/bloombouquet/dasigap:${ROLLBACK_TAG}`;
 
 function createHarness(options: Record<string, string> = {}) {
   const root = mkdtempSync(join(tmpdir(), "dasigap-deploy-test-"));
@@ -21,10 +24,12 @@ function createHarness(options: Record<string, string> = {}) {
   const runtimeImageFile = join(root, "runtime-image");
   const envFile = join(root, "production.env");
   const composeFile = join(root, "compose.yml");
+  const stateFile = join(state, "previous-image");
   writeFileSync(dockerLog, "");
   writeFileSync(envFile, "AUTH_MODE=bouquet\n");
   writeFileSync(composeFile, "services: {}\n");
   if (options.CURRENT_IMAGE) writeFileSync(runtimeImageFile, options.CURRENT_IMAGE);
+  if (options.STATE_IMAGE) writeFileSync(stateFile, `${options.STATE_IMAGE}\n`);
 
   const docker = `#!/bin/sh
 set -eu
@@ -62,7 +67,7 @@ case "$command" in
     if [ "$container" = "dasigap" ]; then
       current=""
       if [ -r "$RUNTIME_IMAGE_FILE" ]; then current=$(cat "$RUNTIME_IMAGE_FILE"); fi
-      if [ "$current" = "\${PREVIOUS_IMAGE:-}" ]; then
+      if [ "$current" = "\${RESTORE_IMAGE:-}" ]; then
         [ "\${RESTORED_HEALTH:-success}" = "success" ] && exit 0
         exit 1
       fi
@@ -93,6 +98,7 @@ esac
     DOCKER_LOG: dockerLog,
     RUNTIME_IMAGE_FILE: runtimeImageFile,
     PREVIOUS_IMAGE,
+    RESTORE_IMAGE: PREVIOUS_IMAGE,
     DASIGAP_ENV_FILE: envFile,
     DASIGAP_STATE_DIR: state,
     DASIGAP_COMPOSE_FILE: composeFile,
@@ -104,6 +110,7 @@ esac
   return {
     root,
     state,
+    stateFile,
     dockerLog,
     runtimeImageFile,
     env,
@@ -113,6 +120,13 @@ esac
 
 function runDeploy(harness: ReturnType<typeof createHarness>, tag = TARGET_TAG) {
   return spawnSync("sh", [resolve("deploy/deploy.sh"), tag], {
+    env: harness.env,
+    encoding: "utf8",
+  });
+}
+
+function runRollback(harness: ReturnType<typeof createHarness>, ...args: string[]) {
+  return spawnSync("sh", [resolve("deploy/rollback.sh"), ...args], {
     env: harness.env,
     encoding: "utf8",
   });
@@ -204,5 +218,65 @@ describe("production deploy state machine", () => {
     expect(result.status).not.toBe(0);
     expect(log).not.toContain(`image=${PREVIOUS_IMAGE}`);
     expect(log).toMatch(/docker (?:rm|stop).*dasigap/);
+  });
+});
+
+describe("production rollback state machine", () => {
+  it("leaves the current application untouched when rollback candidate health fails", () => {
+    const harness = createHarness({ CURRENT_IMAGE: TARGET_IMAGE, CANDIDATE_HEALTH: "fail" });
+    const result = runRollback(harness, ROLLBACK_TAG);
+    const log = harness.log();
+
+    expect(result.status).not.toBe(0);
+    expect(log).toContain("dasigap-candidate");
+    expect(productionUpLines(log)).toEqual([]);
+  });
+
+  it("switches to a healthy rollback target only after candidate validation", () => {
+    const harness = createHarness({ CURRENT_IMAGE: TARGET_IMAGE });
+    const result = runRollback(harness, ROLLBACK_TAG);
+    const log = harness.log();
+    const ups = productionUpLines(log);
+
+    expect(result.status).toBe(0);
+    expect(log.indexOf("dasigap-candidate")).toBeLessThan(log.indexOf("docker compose"));
+    expect(ups).toHaveLength(1);
+    expect(ups[0]).toContain(`image=${ROLLBACK_IMAGE}`);
+  });
+
+  it("never invokes a migration while rolling application code back", () => {
+    const harness = createHarness({ CURRENT_IMAGE: TARGET_IMAGE });
+    const result = runRollback(harness, ROLLBACK_TAG);
+    const log = harness.log();
+
+    expect(result.status).toBe(0);
+    expect(log).not.toContain("migrate-sha-");
+    expect(log).not.toMatch(/prisma|migrat(?:e|or)/i);
+  });
+
+  it("restores the application that was current when rollback post-switch health fails", () => {
+    const harness = createHarness({
+      CURRENT_IMAGE: TARGET_IMAGE,
+      PRODUCTION_HEALTH: "fail",
+      RESTORE_IMAGE: TARGET_IMAGE,
+      RESTORED_HEALTH: "success",
+    });
+    const result = runRollback(harness, ROLLBACK_TAG);
+    const ups = productionUpLines(harness.log());
+
+    expect(result.status).not.toBe(0);
+    expect(ups.some((line) => line.includes(`image=${ROLLBACK_IMAGE}`))).toBe(true);
+    expect(ups.some((line) => line.includes(`image=${TARGET_IMAGE}`))).toBe(true);
+  });
+
+  it("uses previous-image as the default rollback target and candidate-tests it before switching", () => {
+    const harness = createHarness({ CURRENT_IMAGE: TARGET_IMAGE, STATE_IMAGE: ROLLBACK_IMAGE });
+    const result = runRollback(harness);
+    const log = harness.log();
+
+    expect(result.status).toBe(0);
+    expect(log).toContain(`docker pull ${ROLLBACK_IMAGE}`);
+    expect(log.indexOf("dasigap-candidate")).toBeLessThan(log.indexOf("docker compose"));
+    expect(productionUpLines(log).some((line) => line.includes(`image=${ROLLBACK_IMAGE}`))).toBe(true);
   });
 });
