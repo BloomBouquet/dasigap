@@ -83,7 +83,7 @@ VALIDATION_ADMIN_USER_IDS=
 - S3-compatible object storage bucket에 대한 인증된 non-mutating `HEAD`
 - release identity
 
-모든 의존성이 준비되면 HTTP 200과 `status: "ready"`, 하나라도 실패하면 HTTP 503과 `status: "not_ready"`를 반환합니다. 응답에는 내부 DB/S3 오류나 credential 같은 민감한 상세 내용을 노출하지 않습니다.
+모든 의존성이 준비되면 HTTP 200과 `status: "ready"`, 하나라도 실패하면 HTTP 503과 `status: "unavailable"`를 반환합니다. 응답에는 내부 DB/S3 오류나 credential 같은 민감한 상세 내용을 노출하지 않습니다.
 
 ### `/api/health`
 
