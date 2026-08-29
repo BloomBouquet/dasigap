@@ -68,3 +68,8 @@ if (( post_switch_failed != 0 )); then
   echo "post-switch verification failed" >&2
   exit 70
 fi
+
+cleanup_script="${CLEANUP_RELEASES:-$SCRIPT_DIR/cleanup-releases.sh}"
+if [[ -f "$cleanup_script" ]]; then
+  bash "$cleanup_script" || echo "release cleanup warning" >&2
+fi
