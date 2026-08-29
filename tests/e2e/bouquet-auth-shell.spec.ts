@@ -21,3 +21,13 @@ test("privacy policy and terms remain public before login", async ({ page }) => 
   await page.goto("/terms");
   await expect(page.getByRole("heading", { name: "이용약관" })).toBeVisible();
 });
+
+test("anonymous internal route preserves a safe local returnTo", async ({ page }) => {
+  await page.context().setExtraHTTPHeaders({});
+  await page.goto("/internal/validation");
+
+  await expect(page.getByRole("link", { name: "꽃다발로 로그인" })).toHaveAttribute(
+    "href",
+    "/auth/bouquet/start?returnTo=%2Finternal%2Fvalidation",
+  );
+});

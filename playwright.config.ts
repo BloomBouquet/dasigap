@@ -24,6 +24,7 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     env: {
       AUTH_MODE: "dev",
+      VALIDATION_ADMIN_USER_IDS: "e2e-user",
       DATABASE_URL:
         process.env.DATABASE_URL ??
         "postgresql://postgres:postgres@127.0.0.1:5432/dasigap",
