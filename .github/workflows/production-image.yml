@@ -68,6 +68,44 @@ jobs:
             exit 1
           fi
 
+      - name: Build local migration image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: migrator
+          load: true
+          push: false
+          tags: dasigap-migrator-smoke:${{ github.sha }}
+          cache-from: type=gha
+
+      - name: Smoke-test migration image
+        run: |
+          set -euo pipefail
+          docker run -d --name dasigap-migration-postgres \
+            -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=dasigap_migration \
+            postgres:17-alpine
+
+          cleanup() {
+            docker rm -f dasigap-migration-postgres >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if docker exec dasigap-migration-postgres pg_isready -U postgres -d dasigap_migration >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = "1"
+
+          docker run --rm --network host \
+            -e DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55432/dasigap_migration \
+            dasigap-migrator-smoke:${{ github.sha }}
+
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: image-smoke
@@ -88,6 +126,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish immutable migration tag
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: migrator
+          push: true
+          tags: ghcr.io/bloombouquet/dasigap:migrate-sha-${{ github.sha }}
+          cache-from: type=gha
 
       - name: Publish immutable and latest tags
         uses: docker/build-push-action@v7
