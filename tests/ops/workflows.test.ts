@@ -26,3 +26,46 @@ describe("production image release identity", () => {
     expect(compose).not.toContain('"0.0.0.0:3000:3000"');
   });
 });
+
+describe("protected production workflows", () => {
+  it("protects deploy and rollback with shared serialization, pinned SSH, and exact main SHAs", () => {
+    const deploy = read(".github/workflows/deploy-production.yml");
+    const rollback = read(".github/workflows/rollback-production.yml");
+    const combined = `${deploy}\n${rollback}`;
+
+    expect(deploy).toContain("environment: production");
+    expect(rollback).toContain("environment: production");
+    expect(deploy).toContain("group: dasigap-production-deploy");
+    expect(rollback).toContain("group: dasigap-production-deploy");
+    expect(deploy).toContain("cancel-in-progress: false");
+    expect(rollback).toContain("cancel-in-progress: false");
+
+    expect(deploy).toContain("DEPLOY_KNOWN_HOSTS");
+    expect(rollback).toContain("DEPLOY_KNOWN_HOSTS");
+    expect(deploy).toContain("StrictHostKeyChecking=yes");
+    expect(rollback).toContain("StrictHostKeyChecking=yes");
+    expect(deploy).toContain("PRODUCTION_BASE_URL");
+    expect(rollback).toContain("PRODUCTION_BASE_URL");
+
+    expect(deploy).toContain("^[0-9a-f]{40}$");
+    expect(rollback).toContain("^[0-9a-f]{40}$");
+    expect(deploy).toContain('git merge-base --is-ancestor "$IMAGE_SHA" origin/main');
+    expect(rollback).toContain('git merge-base --is-ancestor "$IMAGE_SHA" origin/main');
+
+    expect(combined).not.toContain("ssh-keyscan");
+    expect(combined).not.toContain("StrictHostKeyChecking=no");
+    expect(combined).not.toContain("git pull");
+  });
+
+  it("keeps rollback application-only and verifies public readiness with the exact target sha", () => {
+    const deploy = read(".github/workflows/deploy-production.yml");
+    const rollback = read(".github/workflows/rollback-production.yml");
+
+    expect(deploy).toContain("/api/health/ready");
+    expect(rollback).toContain("/api/health/ready");
+    expect(deploy).toContain("--restore-previous-or-stop");
+    expect(rollback).toContain("--restore-previous-or-stop");
+    expect(rollback).not.toContain("migrate-sha-");
+    expect(rollback).not.toContain("prisma migrate");
+  });
+});
