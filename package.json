@@ -14,7 +14,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:ops": "vitest run tests/ops",
     "test:e2e": "playwright test",
+    "check:deploy": "sh -n deploy/release-common.sh deploy/deploy.sh deploy/rollback.sh",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy"
