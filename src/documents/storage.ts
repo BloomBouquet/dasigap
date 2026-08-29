@@ -90,7 +90,7 @@ function objectUrl(config: StorageConfiguration, storageKey: string) {
 }
 
 function signedHeadersForRequest(
-  method: "PUT" | "DELETE",
+  method: "PUT" | "DELETE" | "HEAD",
   url: URL,
   body: Uint8Array,
   contentType?: string,
@@ -180,6 +180,32 @@ function presignS3(storageKey: string, ttlSeconds: number) {
   params.set("X-Amz-Signature", signature);
   url.search = params.toString();
   return url.toString();
+}
+
+export async function checkObjectStorageReadiness(
+  { timeoutMs = 2_000 }: { timeoutMs?: number } = {},
+): Promise<boolean> {
+  try {
+    const config = requireConfiguration();
+    const url = objectUrl(config, "");
+    const empty = new Uint8Array();
+    const headers = signedHeadersForRequest("HEAD", url, empty);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(url, {
+        method: "HEAD",
+        headers,
+        signal: controller.signal,
+      });
+      return response.ok;
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return false;
+  }
 }
 
 export async function putPrivateObject(input: PutPrivateObjectInput): Promise<{ storageKey: string }> {
