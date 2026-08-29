@@ -12,6 +12,7 @@ describe("production operations workflows", () => {
     expect(text).toContain("workflow_dispatch:");
     expect(text).toContain("environment: production");
     expect(text).toContain("group: dasigap-production-deploy");
+    expect(text).toContain("cancel-in-progress: false");
     expect(text).toContain("PRODUCTION_KNOWN_HOSTS");
     expect(text).toContain("build-production-release.yml");
     expect(text).toContain("dasigap-production-");
@@ -19,5 +20,24 @@ describe("production operations workflows", () => {
     expect(text).not.toContain("ssh-keyscan");
     expect(text).not.toContain("StrictHostKeyChecking=no");
     expect(text).not.toContain("git pull");
+  });
+
+  it("rolls back only to an installed release without migration or artifact download", () => {
+    const text = workflow(".github/workflows/rollback-production-release.yml");
+
+    expect(text).toContain("workflow_dispatch:");
+    expect(text).toContain("target_sha:");
+    expect(text).toContain("environment: production");
+    expect(text).toContain("group: dasigap-production-deploy");
+    expect(text).toContain("cancel-in-progress: false");
+    expect(text).toContain("PRODUCTION_KNOWN_HOSTS");
+    expect(text).toContain("rollback-release.sh");
+    expect(text).not.toContain("actions/download-artifact");
+    expect(text).not.toContain("pnpm install");
+    expect(text).not.toContain("prisma migrate");
+    expect(text).not.toContain("git fetch");
+    expect(text).not.toContain("git checkout");
+    expect(text).not.toContain("ssh-keyscan");
+    expect(text).not.toContain("StrictHostKeyChecking=no");
   });
 });
