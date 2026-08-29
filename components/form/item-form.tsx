@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 type ItemField =
   | "name"
@@ -55,6 +55,33 @@ export function ItemForm() {
   const [form, setForm] = useState<FormState>(initialState);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [submitting, setSubmitting] = useState(false);
+  const registrationStartEventIdRef = useRef<string | null>(null);
+  const registrationStartTrackedRef = useRef(false);
+
+  useEffect(() => {
+    if (registrationStartTrackedRef.current) return;
+    registrationStartTrackedRef.current = true;
+
+    async function trackRegistrationStart() {
+      try {
+        const response = await fetch("/api/product-events", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ type: "ITEM_REGISTRATION_STARTED" }),
+        });
+        if (!response.ok) return;
+
+        const body = await response.json();
+        if (typeof body?.eventId === "string") {
+          registrationStartEventIdRef.current = body.eventId;
+        }
+      } catch {
+        // Analytics is best-effort and must not block item registration.
+      }
+    }
+
+    void trackRegistrationStart();
+  }, []);
 
   function updateField(name: ItemField, value: string) {
     setForm((current) => ({ ...current, [name]: value }));
@@ -86,6 +113,7 @@ export function ItemForm() {
           brand: form.brand,
           modelName: form.modelName,
           storeName: form.storeName,
+          registrationStartEventId: registrationStartEventIdRef.current,
         }),
       });
 

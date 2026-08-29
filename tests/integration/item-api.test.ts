@@ -94,7 +94,7 @@ describe("item CRUD API", () => {
     expect(list.items[0].id).toBe(created.item.id);
   });
 
-  it("gets, patches, and deletes an owned item", async () => {
+  it("gets, patches, and deletes an owned item with its item-scoped analytics", async () => {
     const item = await prisma.item.create({
       data: {
         userId: API_USER_A,
@@ -102,6 +102,13 @@ describe("item CRUD API", () => {
         category: "Audio",
         purchaseDate: new Date("2026-08-20T00:00:00.000Z"),
         purchasePrice: 249000,
+      },
+    });
+    const event = await prisma.productEvent.create({
+      data: {
+        userId: API_USER_A,
+        itemId: item.id,
+        type: "ITEM_LIFECYCLE_UPDATED",
       },
     });
 
@@ -132,6 +139,7 @@ describe("item CRUD API", () => {
     );
     expect(deleteResponse.status).toBe(204);
     await expect(prisma.item.findUnique({ where: { id: item.id } })).resolves.toBeNull();
+    await expect(prisma.productEvent.findUnique({ where: { id: event.id } })).resolves.toBeNull();
   });
 
   it("returns a stable validation error envelope with field errors", async () => {

@@ -35,10 +35,27 @@ const RULES = [
     name: "internal buyer/seller chat or escrow/payment flow",
     pattern: /(?:buyer.{0,60}seller|seller.{0,60}buyer).{0,100}(?:chat|payment|escrow)|(?:chat|payment|escrow).{0,100}(?:buyer.{0,60}seller|seller.{0,60}buyer)/is,
   },
+  {
+    name: "external analytics SDK or tag",
+    pattern: /(?:posthog|amplitude|mixpanel|segment\.io|googletagmanager\.com|google-analytics\.com|\bgtag\s*\(|@vercel\/analytics)/i,
+  },
 ] as const;
 
+const BANNED_ANALYTICS_PACKAGES = new Set([
+  "posthog-js",
+  "posthog-node",
+  "@amplitude/analytics-browser",
+  "@amplitude/analytics-node",
+  "mixpanel",
+  "mixpanel-browser",
+  "@segment/analytics-next",
+  "@segment/analytics-node",
+  "@vercel/analytics",
+  "react-ga4",
+]);
+
 describe("forbidden MVP feature scan", () => {
-  it("contains no marketplace automation, scraping, credential storage, or internal trade implementation", () => {
+  it("contains no marketplace automation, scraping, credential storage, internal trade, or external analytics implementation", () => {
     const findings: string[] = [];
 
     for (const file of ROOTS.flatMap(productionFiles)) {
@@ -49,5 +66,18 @@ describe("forbidden MVP feature scan", () => {
     }
 
     expect(findings).toEqual([]);
+  });
+
+  it("does not install an external product analytics SDK", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const installed = new Set([
+      ...Object.keys(packageJson.dependencies ?? {}),
+      ...Object.keys(packageJson.devDependencies ?? {}),
+    ]);
+
+    expect([...installed].filter((name) => BANNED_ANALYTICS_PACKAGES.has(name))).toEqual([]);
   });
 });

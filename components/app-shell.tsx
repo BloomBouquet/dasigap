@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { AppVisitTracker } from "./analytics/app-visit-tracker";
 import { BottomNav } from "./bottom-nav";
 
 type SessionState =
@@ -94,6 +95,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="app-shell">
+      <AppVisitTracker />
       <div className="app-shell-content">{children}</div>
       <footer className="legal-footer">
         <Link href="/privacy">개인정보처리방침</Link>

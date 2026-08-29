@@ -38,6 +38,18 @@ enum MaintenanceType {
   NOTE
 }
 
+enum ProductEventType {
+  APP_VISITED
+  ITEM_REGISTRATION_STARTED
+  ITEM_REGISTRATION_COMPLETED
+  ITEM_LIFECYCLE_UPDATED
+  RESALE_STARTED
+  RESALE_COMPLETED
+  RESALE_COPY_COPIED
+  SALE_COMPLETED
+  USAGE_COST_VIEWED
+}
+
 model Item {
   id               String              @id @default(uuid()) @db.Uuid
   userId           String
@@ -60,6 +72,7 @@ model Item {
   maintenance      MaintenanceRecord[]
   resaleDraft      ResaleDraft?
   saleRecord       SaleRecord?
+  productEvents    ProductEvent[]
 
   @@index([userId])
   @@index([status])
@@ -122,6 +135,22 @@ model SaleRecord {
   soldPrice Int
   channel   String?
   item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+}
+
+model ProductEvent {
+  id         String           @id @default(uuid()) @db.Uuid
+  userId     String
+  itemId     String?          @db.Uuid
+  type       ProductEventType
+  durationMs Int?
+  dedupeKey  String?          @unique
+  createdAt  DateTime         @default(now())
+  item       Item?            @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([itemId, type])
 }
 
 model BouquetAuthFlow {

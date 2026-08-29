@@ -1,3 +1,4 @@
+import { recordProductEvent } from "../../../../../src/analytics/events";
 import { requireUser } from "../../../../../src/auth/server-auth";
 import { throwOwnedItemNotFound } from "../../../../../src/db/ownership";
 import {
@@ -17,6 +18,14 @@ async function itemId(context: Context) {
   return id;
 }
 
+async function trackLifecycleUpdate(userId: string, id: string) {
+  try {
+    await recordProductEvent({ userId, itemId: id, type: "ITEM_LIFECYCLE_UPDATED" });
+  } catch {
+    console.error("Failed to record lifecycle analytics");
+  }
+}
+
 export async function GET(request: Request, context: Context): Promise<Response> {
   try {
     const user = await requireUser(request);
@@ -30,8 +39,10 @@ export async function GET(request: Request, context: Context): Promise<Response>
 export async function PATCH(request: Request, context: Context): Promise<Response> {
   try {
     const user = await requireUser(request);
+    const id = await itemId(context);
     const body = await readJsonBody(request);
-    const lifecycle = await updateOwnedLifecycle(user.userId, await itemId(context), body);
+    const lifecycle = await updateOwnedLifecycle(user.userId, id, body);
+    await trackLifecycleUpdate(user.userId, id);
     return Response.json({ lifecycle });
   } catch (error) {
     return toApiErrorResponse(error);

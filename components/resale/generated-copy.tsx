@@ -4,9 +4,11 @@ import { useState } from "react";
 
 export function GeneratedCopy({
   generatedText,
+  itemId,
   onReviewPhotos,
 }: {
   generatedText: string;
+  itemId: string;
   onReviewPhotos: () => void;
 }) {
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
@@ -15,6 +17,12 @@ export function GeneratedCopy({
     try {
       await navigator.clipboard.writeText(generatedText);
       setCopyMessage("판매글을 복사했습니다.");
+      void fetch("/api/product-events", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "RESALE_COPY_COPIED", itemId }),
+        keepalive: true,
+      }).catch(() => undefined);
     } catch {
       setCopyMessage("복사하지 못했습니다. 내용을 길게 눌러 직접 복사해주세요.");
     }
