@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
+  checkObjectStorageReadiness,
   createSignedReadUrl,
   deletePrivateObject,
   putPrivateObject,
@@ -21,6 +22,10 @@ runS3("S3-compatible private storage", () => {
   });
 
   afterAll(() => vi.unstubAllEnvs());
+
+  it("proves the configured private bucket is reachable without mutation", async () => {
+    await expect(checkObjectStorageReadiness({ timeoutMs: 2_000 })).resolves.toBe(true);
+  });
 
   it("uploads privately, reads through a short-lived presigned URL, and deletes the object", async () => {
     const storageKey = `release-gate/${randomUUID()}/receipt.txt`;
