@@ -51,6 +51,8 @@ jobs:
         run: pnpm typecheck
       - name: Unit, integration, security, and forbidden-feature tests
         run: pnpm test
+      - name: Production release script syntax
+        run: pnpm check:ops
       - name: Start S3-compatible MinIO
         run: |
           docker run -d --name dasigap-minio \
