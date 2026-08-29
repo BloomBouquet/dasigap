@@ -15,7 +15,7 @@ describe("server deployment artifacts", () => {
     expect(compose).toContain("127.0.0.1:3000:3000");
     expect(compose).toContain("/etc/dasigap/dasigap.env");
     expect(compose).toContain("restart: unless-stopped");
-    expect(compose).toContain("/api/health");
+    expect(compose).toContain("/api/health/live");
     expect(compose).not.toMatch(/(?:^|\s)-\s*["']?3000:3000/);
   });
 
@@ -35,27 +35,38 @@ describe("server deployment artifacts", () => {
     expect(workflow).toContain("ghcr.io/bloombouquet/dasigap:migrate-sha-${{ github.sha }}");
   });
 
-  it("deploys an immutable app image only after an immutable migration image succeeds", () => {
+  it("deploys an immutable app image only after migration and candidate validation succeed", () => {
     const script = read("deploy/deploy.sh");
+    const common = read("deploy/release-common.sh");
 
-    expect(script).toContain("^sha-[0-9a-f]\\{40\\}$");
-    expect(script).toContain("ghcr.io/bloombouquet/dasigap:migrate-");
+    expect(common).toContain("^sha-[0-9a-f]\\{40\\}$");
+    expect(common).toContain("ghcr.io/bloombouquet/dasigap");
+    expect(common).toContain('CANDIDATE_CONTAINER="${DASIGAP_CANDIDATE_CONTAINER:-dasigap-candidate}"');
+    expect(common).toContain('-p "127.0.0.1:${CANDIDATE_PORT}:3000"');
+    expect(common).toContain("/api/health/live");
+    expect(common).toContain("/api/health/ready");
+
+    expect(script).toContain('MIGRATION_IMAGE="$REGISTRY_IMAGE:migrate-$IMAGE_TAG"');
     expect(script).toContain("docker run --rm --network host");
-    expect(script).toContain("docker compose");
-    expect(script).toContain("/api/health");
-    expect(script).toContain("previous-image");
+    expect(script).toContain("validate_candidate");
+    expect(script).toContain("write_previous_image");
+    expect(script).toContain("restore_production");
     expect(script).not.toContain("latest");
   });
 
-  it("rolls application code back without attempting a database downgrade", () => {
+  it("rolls application code back through the shared candidate boundary without database downgrade", () => {
     const script = read("deploy/rollback.sh");
+    const common = read("deploy/release-common.sh");
 
-    expect(script).toContain("previous-image");
-    expect(script).toContain("docker compose");
-    expect(script).toContain("/api/health");
-    expect(script).not.toContain("migrate reset");
-    expect(script).not.toContain("migrate resolve");
-    expect(script).not.toContain("migrate down");
+    expect(common).toContain('STATE_FILE="$STATE_DIR/previous-image"');
+    expect(common).toContain("validate_candidate");
+    expect(common).toContain("recreate_production");
+    expect(common).toContain("restore_production");
+    expect(script).toContain("validate_candidate");
+    expect(script).toContain("--restore-previous-or-stop");
+    expect(script).toContain("restore_production");
+    expect(script).not.toContain("migrate-sha-");
+    expect(script).not.toContain("prisma migrate");
   });
 
   it("proxies HTTPS traffic only to the loopback application port", () => {

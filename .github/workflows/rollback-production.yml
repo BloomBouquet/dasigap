@@ -1,10 +1,10 @@
-name: Deploy Production
+name: Rollback Production
 
 on:
   workflow_dispatch:
     inputs:
       image_sha:
-        description: "40-character main commit SHA to deploy"
+        description: "40-character main commit SHA to restore"
         required: true
         type: string
 
@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  rollback:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -35,7 +35,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate deployment input
+      - name: Validate rollback input
         shell: bash
         run: |
           set -euo pipefail
@@ -74,7 +74,7 @@ jobs:
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
-      - name: Stage immutable deployment tooling
+      - name: Stage immutable rollback tooling
         shell: bash
         run: |
           set -euo pipefail
@@ -91,14 +91,13 @@ jobs:
           scp "${SSH_OPTS[@]}" \
             deploy/compose.production.yml \
             deploy/release-common.sh \
-            deploy/deploy.sh \
             deploy/rollback.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:/opt/dasigap/deploy/"
 
           ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            'chmod 700 /opt/dasigap/deploy/release-common.sh /opt/dasigap/deploy/deploy.sh /opt/dasigap/deploy/rollback.sh'
+            'chmod 700 /opt/dasigap/deploy/release-common.sh /opt/dasigap/deploy/rollback.sh'
 
-      - name: Deploy and verify public readiness
+      - name: Roll back and verify public readiness
         shell: bash
         run: |
           set -euo pipefail
@@ -133,10 +132,10 @@ jobs:
             "docker login ghcr.io -u '$GITHUB_ACTOR' --password-stdin"
 
           ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd /opt/dasigap && ./deploy/deploy.sh 'sha-$IMAGE_SHA'"
+            "cd /opt/dasigap && ./deploy/rollback.sh 'sha-$IMAGE_SHA'"
 
           if ! verify_public_release "$IMAGE_SHA"; then
-            echo "public production readiness verification failed; restoring prior application" >&2
+            echo "public rollback readiness verification failed; restoring prior application" >&2
             ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
               'cd /opt/dasigap && ./deploy/rollback.sh --restore-previous-or-stop' || true
 
