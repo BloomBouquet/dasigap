@@ -25,6 +25,9 @@ function LegalLinks() {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const isPublicLegalPage = pathname === "/privacy" || pathname === "/terms";
+  const isInternalPage = pathname.startsWith("/internal/");
+  const returnTo = isPublicLegalPage ? "/" : pathname;
+  const loginHref = `/auth/bouquet/start?returnTo=${encodeURIComponent(returnTo)}`;
   const [session, setSession] = useState<SessionState>({ status: "checking" });
 
   useEffect(() => {
@@ -68,13 +71,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   if (session.status === "anonymous") {
     return (
-      <div className="app-shell">
+      <div className={isInternalPage ? "app-shell internal-app-shell" : "app-shell"}>
         <main className="mobile-shell">
           <section className="status-card">
             <p className="eyebrow">BOUQUET SSO</p>
             <h1 className="page-title">꽃다발 로그인이 필요해요</h1>
             <p className="page-description">다시값은 꽃다발 공통 계정으로 로그인합니다. 비밀번호는 다시값에 전달되지 않습니다.</p>
-            <a className="primary-link" href="/auth/bouquet/start?returnTo=%2F">꽃다발로 로그인</a>
+            <a className="primary-link" href={loginHref}>꽃다발로 로그인</a>
           </section>
         </main>
         <LegalLinks />
@@ -94,15 +97,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="app-shell">
-      <AppVisitTracker />
+    <div className={isInternalPage ? "app-shell internal-app-shell" : "app-shell"}>
+      {!isInternalPage && <AppVisitTracker />}
       <div className="app-shell-content">{children}</div>
       <footer className="legal-footer">
         <Link href="/privacy">개인정보처리방침</Link>
         <Link href="/terms">이용약관</Link>
         <button type="button" onClick={signOut}>로그아웃</button>
       </footer>
-      <BottomNav />
+      {!isInternalPage && <BottomNav />}
     </div>
   );
 }
