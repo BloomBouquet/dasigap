@@ -27,6 +27,7 @@ jobs:
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
       DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
       DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      PRODUCTION_BASE_URL: ${{ vars.PRODUCTION_BASE_URL }}
       IMAGE_SHA: ${{ inputs.image_sha }}
       GHCR_TOKEN: ${{ github.token }}
     steps:
@@ -41,7 +42,16 @@ jobs:
             exit 2
           fi
 
-          git fetch --no-tags --depth=100 origin main
+          node -e '
+            try {
+              const url = new URL(process.env.PRODUCTION_BASE_URL || "");
+              if (url.protocol !== "https:" || url.username || url.password || url.hash) process.exit(1);
+            } catch {
+              process.exit(1);
+            }
+          '
+
+          git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$IMAGE_SHA" origin/main; then
             echo "image_sha must refer to a commit reachable from main" >&2
             exit 1
@@ -78,14 +88,15 @@ jobs:
 
           scp "${SSH_OPTS[@]}" \
             deploy/compose.production.yml \
+            deploy/release-common.sh \
             deploy/deploy.sh \
             deploy/rollback.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:/opt/dasigap/deploy/"
 
           ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            'chmod 700 /opt/dasigap/deploy/deploy.sh /opt/dasigap/deploy/rollback.sh'
+            'chmod 700 /opt/dasigap/deploy/release-common.sh /opt/dasigap/deploy/deploy.sh /opt/dasigap/deploy/rollback.sh'
 
-      - name: Deploy immutable release on server
+      - name: Deploy and verify public readiness
         shell: bash
         run: |
           set -euo pipefail
@@ -95,6 +106,20 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
             -o BatchMode=yes
           )
+
+          verify_public_release() {
+            expected_sha="$1"
+            body="$(curl --fail --silent --show-error --max-time 10 \
+              "${PRODUCTION_BASE_URL%/}/api/health/ready")" || return 1
+            BODY="$body" EXPECTED_SHA="$expected_sha" node -e '
+              try {
+                const value = JSON.parse(process.env.BODY || "");
+                process.exit(value.status === "ready" && value.release === process.env.EXPECTED_SHA ? 0 : 1);
+              } catch {
+                process.exit(1);
+              }
+            '
+          }
 
           cleanup_registry_auth() {
             ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -107,3 +132,16 @@ jobs:
 
           ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
             "cd /opt/dasigap && ./deploy/deploy.sh 'sha-$IMAGE_SHA'"
+
+          if ! verify_public_release "$IMAGE_SHA"; then
+            echo "public production readiness verification failed; restoring prior application" >&2
+            ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+              'cd /opt/dasigap && ./deploy/rollback.sh --restore-previous-or-stop' || true
+
+            restored_image="$(ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "docker inspect -f '{{.Config.Image}}' dasigap 2>/dev/null || true")"
+            if [[ "$restored_image" =~ ^ghcr.io/bloombouquet/dasigap:sha-([0-9a-f]{40})$ ]]; then
+              verify_public_release "${BASH_REMATCH[1]}" || true
+            fi
+            exit 1
+          fi
