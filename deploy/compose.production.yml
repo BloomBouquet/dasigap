@@ -1,0 +1,22 @@
+services:
+  dasigap:
+    image: ${DASIGAP_IMAGE:?DASIGAP_IMAGE is required}
+    container_name: dasigap
+    restart: unless-stopped
+    env_file:
+      - ${DASIGAP_ENV_FILE:-/etc/dasigap/dasigap.env}
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/api/health',{cache:'no-store'})
+          .then(r=>{if(!r.ok)process.exit(1)})
+          .catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
