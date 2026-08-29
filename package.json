@@ -17,7 +17,7 @@
     "verify:release-artifact": "vitest run ops/release/create-artifact.test.ts",
     "verify:deploy": "vitest run ops/release/validate-artifact.test.ts tests/ops/workflows.test.ts",
     "test:ops": "vitest run tests/ops/release-scripts.test.ts",
-    "check:ops": "bash -n ops/release/common.sh ops/release/prepare-release.sh ops/release/validate-candidate.sh ops/release/switch-release.sh",
+    "check:ops": "bash -n ops/release/common.sh ops/release/prepare-release.sh ops/release/validate-candidate.sh ops/release/switch-release.sh ops/release/rollback-release.sh ops/release/cleanup-releases.sh",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev"
   },
