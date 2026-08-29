@@ -239,8 +239,8 @@ describe("production rollback state machine", () => {
     const ups = productionUpLines(log);
 
     expect(result.status).toBe(0);
-    expect(log.indexOf("dasigap-candidate")).toBeLessThan(log.indexOf("docker compose"));
     expect(ups).toHaveLength(1);
+    expect(log.indexOf("dasigap-candidate")).toBeLessThan(log.indexOf(ups[0]));
     expect(ups[0]).toContain(`image=${ROLLBACK_IMAGE}`);
   });
 
@@ -273,10 +273,12 @@ describe("production rollback state machine", () => {
     const harness = createHarness({ CURRENT_IMAGE: TARGET_IMAGE, STATE_IMAGE: ROLLBACK_IMAGE });
     const result = runRollback(harness);
     const log = harness.log();
+    const ups = productionUpLines(log);
 
     expect(result.status).toBe(0);
     expect(log).toContain(`docker pull ${ROLLBACK_IMAGE}`);
-    expect(log.indexOf("dasigap-candidate")).toBeLessThan(log.indexOf("docker compose"));
-    expect(productionUpLines(log).some((line) => line.includes(`image=${ROLLBACK_IMAGE}`))).toBe(true);
+    expect(ups).toHaveLength(1);
+    expect(log.indexOf("dasigap-candidate")).toBeLessThan(log.indexOf(ups[0]));
+    expect(ups.some((line) => line.includes(`image=${ROLLBACK_IMAGE}`))).toBe(true);
   });
 });
