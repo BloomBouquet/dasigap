@@ -1,0 +1,199 @@
+name: Deploy production release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Successful Build production release run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: dasigap-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+      PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+      PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+      PRODUCTION_KNOWN_HOSTS: ${{ secrets.PRODUCTION_KNOWN_HOSTS }}
+      PRODUCTION_BASE_URL: ${{ secrets.PRODUCTION_BASE_URL }}
+      PRODUCTION_SSH_PORT: ${{ secrets.PRODUCTION_SSH_PORT }}
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate release build provenance
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.release_run_id }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || {
+            echo "release run id must contain digits only" >&2
+            exit 64
+          }
+
+          run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")"
+          event="$(jq -r '.event' <<<"$run_json")"
+          conclusion="$(jq -r '.conclusion' <<<"$run_json")"
+          path="$(jq -r '.path' <<<"$run_json")"
+          sha="$(jq -r '.head_sha' <<<"$run_json")"
+
+          [[ "$event" == "workflow_dispatch" ]] || {
+            echo "release source run was not manually dispatched" >&2
+            exit 65
+          }
+          [[ "$conclusion" == "success" ]] || {
+            echo "release source run did not succeed" >&2
+            exit 65
+          }
+          [[ "$path" == ".github/workflows/build-production-release.yml" ]] || {
+            echo "release source workflow is not trusted" >&2
+            exit 65
+          }
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "release source SHA is invalid" >&2
+            exit 65
+          }
+
+          git fetch --no-tags origin main
+          git cat-file -e "$sha^{commit}"
+          git merge-base --is-ancestor "$sha" origin/main || {
+            echo "release source SHA is not contained in main" >&2
+            exit 65
+          }
+
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Download exact production artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dasigap-production-${{ steps.source.outputs.sha }}
+          path: release-output
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate downloaded artifact
+        id: artifact
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          archive="release-output/dasigap-release-${SOURCE_SHA}.tgz"
+          validated="$(node ops/release/validate-artifact.mjs release-output/release-metadata.json "$archive")"
+          [[ "$validated" == "$SOURCE_SHA" ]] || {
+            echo "downloaded artifact SHA does not match source run" >&2
+            exit 65
+          }
+          echo "sha=$validated" >> "$GITHUB_OUTPUT"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Validate production connection inputs
+        id: connection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$PRODUCTION_HOST" && -n "$PRODUCTION_USER" && -n "$PRODUCTION_SSH_KEY" && -n "$PRODUCTION_KNOWN_HOSTS" ]] || {
+            echo "production SSH configuration is incomplete" >&2
+            exit 66
+          }
+          node -e 'const u=new URL(process.env.PRODUCTION_BASE_URL); if(u.protocol!=="https:"||u.username||u.password||u.hash) process.exit(64)'
+          port="${PRODUCTION_SSH_PORT:-22}"
+          [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || {
+            echo "production SSH port is invalid" >&2
+            exit 64
+          }
+          echo "port=$port" >> "$GITHUB_OUTPUT"
+
+      - name: Configure pinned SSH trust
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$PRODUCTION_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Upload release to unique staging path
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ steps.artifact.outputs.sha }}
+          RELEASE_ARCHIVE: ${{ steps.artifact.outputs.archive }}
+          SSH_PORT: ${{ steps.connection.outputs.port }}
+          DEPLOY_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          staging="/home/ubuntu/dasigap/.staging/${RELEASE_SHA}-${DEPLOY_RUN_ID}"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" "$PRODUCTION_USER@$PRODUCTION_HOST" \
+            "mkdir -p -- '$staging'"
+          scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" \
+            release-output/release-metadata.json "$RELEASE_ARCHIVE" \
+            "$PRODUCTION_USER@$PRODUCTION_HOST:$staging/"
+
+      - name: Prepare and switch production release
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ steps.artifact.outputs.sha }}
+          SSH_PORT: ${{ steps.connection.outputs.port }}
+          DEPLOY_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" "$PRODUCTION_USER@$PRODUCTION_HOST" \
+            bash -s -- "$RELEASE_SHA" "$DEPLOY_RUN_ID" "$PRODUCTION_BASE_URL" <<'REMOTE'
+          set -Eeuo pipefail
+          sha="${1:-}"
+          deploy_run_id="${2:-}"
+          production_base_url="${3:-}"
+          root="/home/ubuntu/dasigap"
+
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 64
+          [[ "$deploy_run_id" =~ ^[0-9]+$ ]] || exit 64
+          node -e 'const u=new URL(process.argv[1]); if(u.protocol!=="https:"||u.username||u.password||u.hash) process.exit(64)' "$production_base_url"
+
+          staging="$root/.staging/${sha}-${deploy_run_id}"
+          metadata="$staging/release-metadata.json"
+          archive="$staging/dasigap-release-${sha}.tgz"
+          source_dir="$staging/source"
+
+          [[ -s "$metadata" && -s "$archive" ]] || {
+            echo "staged release artifact is incomplete" >&2
+            exit 66
+          }
+
+          node -e '
+            const fs=require("node:fs");
+            const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+            if(m.service!=="dasigap"||m.commitSha!==process.argv[2]||!/^[0-9a-f]{40}$/.test(m.commitSha)) process.exit(65);
+          ' "$metadata" "$sha"
+
+          rm -rf "$source_dir"
+          mkdir -p "$source_dir"
+          tar -xzf "$archive" -C "$source_dir"
+          node -e '
+            const fs=require("node:fs");
+            const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+            if(m.service!=="dasigap"||m.commitSha!==process.argv[2]) process.exit(65);
+          ' "$source_dir/release-metadata.json" "$sha"
+
+          bash "$source_dir/ops/release/prepare-release.sh" "$source_dir" "$sha"
+          rm -rf "$staging"
+          bash "$root/releases/$sha/ops/release/switch-release.sh" "$sha" "$production_base_url"
+          REMOTE
