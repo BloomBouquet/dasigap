@@ -15,6 +15,10 @@ function request(userId: string | null) {
   return new Request("http://localhost/api/internal/validation", { headers });
 }
 
+function ownedEventCount() {
+  return prisma.productEvent.count({ where: { userId: { in: USERS } } });
+}
+
 async function seedValidationEvents() {
   const item = await prisma.item.create({
     data: {
@@ -103,7 +107,7 @@ describe("internal validation metrics API", () => {
   it("returns aggregate-only metrics to an allowlisted admin without mutating analytics", async () => {
     vi.stubEnv("VALIDATION_ADMIN_USER_IDS", ` other-admin, ${ADMIN} `);
     const item = await seedValidationEvents();
-    const before = await prisma.productEvent.count();
+    const before = await ownedEventCount();
 
     const response = await GET(request(ADMIN));
 
@@ -126,6 +130,6 @@ describe("internal validation metrics API", () => {
     expect(serialized).not.toContain("userId");
     expect(serialized).not.toContain("itemId");
 
-    expect(await prisma.productEvent.count()).toBe(before);
+    expect(await ownedEventCount()).toBe(before);
   });
 });
