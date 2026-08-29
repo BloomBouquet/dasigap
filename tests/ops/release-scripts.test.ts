@@ -4,8 +4,10 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   readlink,
   symlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -56,6 +58,13 @@ function switchEnv(candidate: string, curl: string, pm2: string) {
   };
 }
 
+async function healthyCurl(name: string, sha: string) {
+  return executable(
+    name,
+    `url="\${!#}"\ncase "$url" in\n  */live) status=ok ;;\n  */ready) status=ready ;;\n  *) exit 22 ;;\nesac\nprintf '{"status":"%s","release":"${sha}"}\\n' "$status"`,
+  );
+}
+
 describe("production release scripts", () => {
   it("rejects traversal instead of constructing a release path", async () => {
     await expect(
@@ -96,10 +105,7 @@ describe("production release scripts", () => {
 
     const candidate = await executable("candidate-ok", "exit 0");
     const pm2 = await executable("pm2-ok", `echo "$*" >> "${root}/pm2.log"`);
-    const curl = await executable(
-      "curl-ok",
-      `url="\${!#}"\ncase "$url" in\n  */live) status=ok ;;\n  */ready) status=ready ;;\n  *) exit 22 ;;\nesac\nprintf '{"status":"%s","release":"${targetSha}"}\\n' "$status"`,
-    );
+    const curl = await healthyCurl("curl-ok", targetSha);
 
     await exec("bash", ["ops/release/switch-release.sh", targetSha, "https://dasigap.invalid"], {
       env: switchEnv(candidate, curl, pm2),
@@ -131,5 +137,69 @@ describe("production release scripts", () => {
     ).rejects.toBeTruthy();
 
     expect(await readlink(join(root, "current"))).toBe(oldRelease);
+  });
+
+  it("leaves current unchanged when rollback target candidate is unhealthy", async () => {
+    const oldSha = "7".repeat(40);
+    const targetSha = "8".repeat(40);
+    const oldRelease = await installed(oldSha);
+    await installed(targetSha);
+    await symlink(oldRelease, join(root, "current"));
+
+    const candidate = await executable("rollback-candidate-fail", "exit 9");
+    const curl = await executable("rollback-curl-unused", "exit 99");
+    const pm2 = await executable("rollback-pm2-unused", "exit 99");
+
+    await expect(
+      exec("bash", ["ops/release/rollback-release.sh", targetSha, "https://dasigap.invalid"], {
+        env: switchEnv(candidate, curl, pm2),
+      }),
+    ).rejects.toBeTruthy();
+
+    expect(await readlink(join(root, "current"))).toBe(oldRelease);
+  });
+
+  it("rolls back to an installed healthy release without migration", async () => {
+    const oldSha = "9".repeat(40);
+    const targetSha = "a".repeat(40);
+    const oldRelease = await installed(oldSha);
+    const targetRelease = await installed(targetSha);
+    await symlink(oldRelease, join(root, "current"));
+
+    const candidate = await executable("rollback-candidate-ok", "exit 0");
+    const pm2 = await executable("rollback-pm2-ok", `echo "$*" >> "${root}/rollback-pm2.log"`);
+    const curl = await healthyCurl("rollback-curl-ok", targetSha);
+
+    await exec("bash", ["ops/release/rollback-release.sh", targetSha, "https://dasigap.invalid"], {
+      env: switchEnv(candidate, curl, pm2),
+    });
+
+    expect(await readlink(join(root, "current"))).toBe(targetRelease);
+    expect(await readlink(join(root, "previous"))).toBe(oldRelease);
+    expect(await readFile(join(root, "rollback-pm2.log"), "utf8")).toContain("startOrReload");
+  });
+
+  it("keeps current, previous, and the three newest additional releases", async () => {
+    const currentSha = "a".repeat(40);
+    const previousSha = "b".repeat(40);
+    const extras = ["c", "d", "e", "f"].map((value) => value.repeat(40));
+    const releases = [currentSha, previousSha, ...extras];
+
+    for (const [index, sha] of releases.entries()) {
+      const release = await installed(sha);
+      const time = new Date(Date.UTC(2026, 7, 29, 0, index, 0));
+      await utimes(release, time, time);
+    }
+
+    await symlink(join(root, "releases", currentSha), join(root, "current"));
+    await symlink(join(root, "releases", previousSha), join(root, "previous"));
+
+    await exec("bash", ["ops/release/cleanup-releases.sh"], {
+      env: { ...process.env, DASIGAP_ROOT: root },
+    });
+
+    expect((await readdir(join(root, "releases"))).sort()).toEqual(
+      [currentSha, previousSha, extras[1], extras[2], extras[3]].sort(),
+    );
   });
 });
