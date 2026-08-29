@@ -19,6 +19,16 @@ describe("server deployment artifacts", () => {
     expect(compose).not.toMatch(/(?:^|\s)-\s*["']?3000:3000/);
   });
 
+  it("publishes an immutable Prisma migration image alongside the app image", () => {
+    const dockerfile = read("Dockerfile");
+    const workflow = read(".github/workflows/production-image.yml");
+
+    expect(dockerfile).toContain("AS migrator");
+    expect(dockerfile).toContain('["pnpm", "prisma", "migrate", "deploy"]');
+    expect(workflow).toContain("target: migrator");
+    expect(workflow).toContain("ghcr.io/bloombouquet/dasigap:migrate-sha-${{ github.sha }}");
+  });
+
   it("deploys an immutable app image only after an immutable migration image succeeds", () => {
     const script = read("deploy/deploy.sh");
 
