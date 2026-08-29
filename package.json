@@ -15,6 +15,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "verify:release-artifact": "vitest run ops/release/create-artifact.test.ts",
+    "test:ops": "vitest run tests/ops/release-scripts.test.ts",
+    "check:ops": "bash -n ops/release/common.sh ops/release/prepare-release.sh ops/release/validate-candidate.sh ops/release/switch-release.sh",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev"
   },
