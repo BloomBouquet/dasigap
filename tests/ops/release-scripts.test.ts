@@ -51,6 +51,8 @@ function switchEnv(candidate: string, curl: string, pm2: string) {
     CANDIDATE_VALIDATOR: candidate,
     CURL_BIN: curl,
     PM2_BIN: pm2,
+    HEALTH_ATTEMPTS: "1",
+    HEALTH_SLEEP_SECONDS: "0",
   };
 }
 
