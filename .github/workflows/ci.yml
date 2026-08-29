@@ -51,6 +51,14 @@ jobs:
         run: pnpm typecheck
       - name: Unit, integration, security, and forbidden-feature tests
         run: pnpm test
+      - name: Validate server deployment artifacts
+        run: |
+          set -euo pipefail
+          sh -n deploy/deploy.sh
+          sh -n deploy/rollback.sh
+          DASIGAP_IMAGE=ghcr.io/bloombouquet/dasigap:sha-0000000000000000000000000000000000000000 \
+          DASIGAP_ENV_FILE="$PWD/deploy/.env.production.example" \
+            docker compose -f deploy/compose.production.yml config >/dev/null
       - name: Start S3-compatible MinIO
         run: |
           docker run -d --name dasigap-minio \
