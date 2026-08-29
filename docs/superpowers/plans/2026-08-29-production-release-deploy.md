@@ -13,11 +13,11 @@
 ## Global Constraints
 
 - Production runtime is Node.js 22.
-- Package manager is exactly `pnpm@11.24.0` and CI/release installs use `pnpm install --frozen-lockfile`.
+- Package manager is exactly `pnpm@11.24.0`; CI uses `pnpm install --frozen-lockfile`, while the server uses `pnpm install --frozen-lockfile --prod=false` because `prisma` is currently a devDependency required by `prisma generate` and `prisma migrate deploy` during release preparation.
 - Production deployment stays on the existing Ubuntu + Nginx + PM2 operating model; no Docker/Kubernetes deployment layer is introduced.
 - Release build, deploy, and rollback are manual `workflow_dispatch` operations; merging `main` does not automatically deploy.
 - Repository code and GitHub artifacts must never contain `.env.production`, OAuth client secrets, PostgreSQL credentials, S3 credentials, or SSH private keys.
-- Production SSH host verification uses the pinned `PRODUCTION_KNOWN_HOSTS` secret; runtime `ssh-keyscan` is forbidden.
+- Production SSH host verification uses the pinned `PRODUCTION_KNOWN_HOSTS` secret; runtime `ssh-keyscan` and `StrictHostKeyChecking=no` are forbidden.
 - `GET /api/health/live` must not touch backing services.
 - `GET /api/health/ready` returns HTTP 200 only when PostgreSQL and S3-compatible private storage are ready; failures return HTTP 503 without dependency details.
 - Health responses use `Cache-Control: no-store` and expose only service status plus release SHA.
@@ -32,34 +32,38 @@
 
 ## File Structure
 
-Create or modify the following focused units:
-
-- `src/health/release.ts` — release identity helper used by both health routes.
-- `src/health/readiness.ts` — dependency readiness orchestration with bounded timeouts and dependency-detail suppression.
-- `src/health/readiness.test.ts` — unit tests for database/storage success, failure, and timeout behavior.
-- `app/api/health/live/route.ts` — unauthenticated liveness HTTP endpoint.
-- `app/api/health/ready/route.ts` — unauthenticated readiness HTTP endpoint.
-- `tests/integration/health-api.test.ts` — route contract tests for status codes, body shape, cache headers, and no auth requirement.
-- `src/documents/storage.ts` — extend the existing S3 boundary with a non-mutating authenticated bucket readiness probe; reuse existing credential parsing and SigV4 helpers.
-- `tests/integration/s3-storage.test.ts` — exercise the new readiness probe against the CI MinIO service.
-- `ops/release/common.sh` — shared safe shell helpers: metadata validation, environment loading, health polling, atomic link replacement, and release-path validation.
-- `ops/release/prepare-release.sh` — prepare immutable release directory, install exact dependencies, generate Prisma, and run `prisma migrate deploy`.
-- `ops/release/validate-candidate.sh` — start/stop a loopback candidate and require matching release SHA from live/ready endpoints.
-- `ops/release/switch-release.sh` — update `previous`/`current`, PM2 reload, post-switch checks, and automatic application rollback on failure.
-- `ops/release/rollback-release.sh` — candidate-validate an installed target SHA and select it atomically without database migration.
-- `ops/pm2/ecosystem.config.cjs` — tracked production PM2 configuration that resolves `current`, loads host-only env, and exposes `DASIGAP_RELEASE_SHA`.
-- `tests/ops/release-scripts.test.ts` — temp-filesystem tests for traversal rejection, immutable release validation, atomic link behavior, and rollback preservation using stubbed PM2/curl commands.
-- `.github/workflows/build-production-release.yml` — manual verified release artifact build from `main`.
-- `.github/workflows/deploy-production-release.yml` — manual artifact-to-server deployment using GitHub `production` environment.
-- `.github/workflows/rollback-production-release.yml` — manual installed-release rollback using the same production concurrency group.
-- `.github/workflows/ci.yml` — include shell syntax/ops tests and S3 readiness integration in the existing branch/PR gate.
-- `package.json` — add explicit production/ops verification scripts only where they reduce duplicated workflow commands.
-- `.env.example` — document non-secret runtime settings such as release root/ports without adding production secret values.
-- `docs/release/mvp-checklist.md` — replace the deployment placeholder with exact rollout prerequisites and smoke/rollback gates.
+- `src/health/release.ts` — validate/read release SHA.
+- `src/health/readiness.ts` — bounded database/storage dependency readiness.
+- `src/health/readiness.test.ts` — readiness orchestration unit tests.
+- `app/api/health/live/route.ts` — public liveness endpoint.
+- `app/api/health/ready/route.ts` — public readiness endpoint.
+- `tests/integration/health-api.test.ts` — route contract tests.
+- `src/documents/storage.ts` — add non-mutating signed S3 bucket readiness probe using existing storage configuration/signing boundary.
+- `tests/integration/s3-storage.test.ts` — real MinIO readiness coverage.
+- `ops/release/create-artifact.mjs` — validate SHA, write release metadata, package explicit allowlist.
+- `ops/release/create-artifact.test.ts` — metadata/package policy tests.
+- `ops/release/validate-artifact.mjs` — validate downloaded artifact metadata/archive before SSH.
+- `ops/release/validate-artifact.test.ts` — artifact rejection tests.
+- `ops/release/common.sh` — SHA/path validation, metadata validation, atomic links, health polling.
+- `ops/release/prepare-release.sh` — exact dependency install, Prisma generate/migrate, immutable release placement.
+- `ops/release/validate-candidate.sh` — temporary loopback process and exact-SHA live/ready validation.
+- `ops/release/switch-release.sh` — candidate gate, atomic switch, PM2 reload, post-switch verification, automatic application rollback, successful-release cleanup.
+- `ops/release/rollback-release.sh` — installed target validation, candidate gate, atomic manual rollback, no migration.
+- `ops/release/cleanup-releases.sh` — preserve current/previous + three newest extras.
+- `ops/pm2/ecosystem.config.cjs` — tracked runtime configuration; secrets remain host-only.
+- `tests/ops/release-scripts.test.ts` — temp-filesystem release-script tests using stub binaries.
+- `tests/ops/workflows.test.ts` — production workflow security/static invariants.
+- `.github/workflows/build-production-release.yml` — manual verified release build from `main`.
+- `.github/workflows/deploy-production-release.yml` — manual artifact deployment.
+- `.github/workflows/rollback-production-release.yml` — manual installed-release rollback.
+- `.github/workflows/ci.yml` — preserve all existing gates and add ops verification.
+- `package.json` — focused ops verification scripts.
+- `.env.example` — non-secret operational defaults only.
+- `docs/release/mvp-checklist.md` — exact first-production rollout/smoke/rollback requirements.
 
 ---
 
-### Task 1: Release Identity and Public Liveness
+### Task 1: Release Identity and Liveness
 
 **Files:**
 - Create: `src/health/release.ts`
@@ -67,27 +71,21 @@ Create or modify the following focused units:
 - Create: `tests/integration/health-api.test.ts`
 
 **Interfaces:**
-- Produces: `getReleaseSha(env?: NodeJS.ProcessEnv): string`
-- Produces: `GET(): Promise<Response>` for `/api/health/live`
-- Later tasks consume `getReleaseSha()` for readiness responses and release-SHA verification.
+- Produces `getReleaseSha(env?: NodeJS.ProcessEnv): string`.
+- Produces App Router `GET()` for `/api/health/live`.
 
-- [ ] **Step 1: Write the failing liveness contract test**
-
-Create `tests/integration/health-api.test.ts` with the liveness portion first:
+- [ ] **Step 1: Write the failing liveness tests**
 
 ```ts
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { GET as getLive } from "../../app/api/health/live/route";
 
 describe("health API", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("returns public liveness with the selected release SHA", async () => {
+  it("returns liveness with the release SHA and no-store", async () => {
     vi.stubEnv("DASIGAP_RELEASE_SHA", "a".repeat(40));
-
     const response = await getLive();
-
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
     await expect(response.json()).resolves.toEqual({
@@ -97,27 +95,23 @@ describe("health API", () => {
     });
   });
 
-  it("uses unknown outside a packaged release", async () => {
-    vi.stubEnv("DASIGAP_RELEASE_SHA", "");
+  it("uses unknown for a missing or invalid release SHA", async () => {
+    vi.stubEnv("DASIGAP_RELEASE_SHA", "not-a-sha");
     const response = await getLive();
     expect((await response.json()).release).toBe("unknown");
   });
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [ ] **Step 2: Verify RED**
 
-Run:
+Run `pnpm exec vitest run tests/integration/health-api.test.ts`.
 
-```bash
-pnpm exec vitest run tests/integration/health-api.test.ts
-```
-
-Expected: FAIL because `app/api/health/live/route.ts` does not exist.
+Expected: module-not-found failure for the liveness route.
 
 - [ ] **Step 3: Implement release identity and liveness**
 
-Create `src/health/release.ts`:
+`src/health/release.ts`:
 
 ```ts
 const FULL_SHA = /^[0-9a-f]{40}$/i;
@@ -128,11 +122,10 @@ export function getReleaseSha(env: NodeJS.ProcessEnv = process.env): string {
 }
 ```
 
-Create `app/api/health/live/route.ts`:
+`app/api/health/live/route.ts`:
 
 ```ts
 import { NextResponse } from "next/server";
-
 import { getReleaseSha } from "../../../../src/health/release";
 
 export async function GET() {
@@ -143,25 +136,18 @@ export async function GET() {
 }
 ```
 
-Do not import auth, Prisma, or storage from the liveness route.
+The route must not import auth, Prisma, or storage.
 
-- [ ] **Step 4: Run focused and type checks**
-
-Run:
+- [ ] **Step 4: Verify GREEN and commit**
 
 ```bash
 pnpm exec vitest run tests/integration/health-api.test.ts
 pnpm typecheck
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit the liveness boundary**
-
-```bash
 git add src/health/release.ts app/api/health/live/route.ts tests/integration/health-api.test.ts
 git commit -m "feat: add production liveness endpoint"
 ```
+
+Expected: tests/typecheck pass.
 
 ---
 
@@ -174,79 +160,58 @@ git commit -m "feat: add production liveness endpoint"
 - Modify: `src/documents/storage.ts`
 - Modify: `tests/integration/s3-storage.test.ts`
 - Modify: `tests/integration/health-api.test.ts`
-- Modify: `.github/workflows/ci.yml`
 
 **Interfaces:**
-- Consumes: existing `prisma` from `src/db/prisma.ts`.
-- Produces: `checkObjectStorageReadiness(options?: { timeoutMs?: number }): Promise<boolean>` in `src/documents/storage.ts`.
-- Produces: `checkReadiness(deps?: ReadinessDependencies): Promise<boolean>` in `src/health/readiness.ts`.
-- Produces: `GET(): Promise<Response>` for `/api/health/ready`.
+- Produces `checkObjectStorageReadiness(options?: { timeoutMs?: number }): Promise<boolean>`.
+- Produces `checkReadiness(deps?: ReadinessDependencies): Promise<boolean>`.
+- Produces App Router `GET()` for `/api/health/ready`.
 
-- [ ] **Step 1: Add RED tests for the non-mutating S3 probe**
+- [ ] **Step 1: Write RED readiness tests**
 
-Extend `tests/integration/s3-storage.test.ts` imports:
-
-```ts
-import {
-  checkObjectStorageReadiness,
-  createSignedReadUrl,
-  deletePrivateObject,
-  putPrivateObject,
-} from "../../src/documents/storage";
-```
-
-Add inside the existing MinIO-backed suite:
-
-```ts
-it("proves the configured private bucket is reachable without mutating it", async () => {
-  await expect(checkObjectStorageReadiness({ timeoutMs: 2_000 })).resolves.toBe(true);
-});
-```
-
-- [ ] **Step 2: Add RED unit tests for readiness orchestration**
-
-Create `src/health/readiness.test.ts`:
+`src/health/readiness.test.ts`:
 
 ```ts
 import { describe, expect, it, vi } from "vitest";
-
 import { checkReadiness } from "./readiness";
 
 describe("checkReadiness", () => {
-  it("is ready only when database and object storage are ready", async () => {
+  it("requires both dependencies", async () => {
     const database = vi.fn().mockResolvedValue(true);
     const storage = vi.fn().mockResolvedValue(true);
     await expect(checkReadiness({ database, storage, timeoutMs: 100 })).resolves.toBe(true);
-  });
-
-  it("returns false when either required dependency fails", async () => {
     await expect(checkReadiness({
       database: vi.fn().mockResolvedValue(false),
-      storage: vi.fn().mockResolvedValue(true),
+      storage,
       timeoutMs: 100,
     })).resolves.toBe(false);
   });
 
-  it("returns false when dependency probing exceeds the bound", async () => {
-    const never = () => new Promise<boolean>(() => {});
+  it("fails closed on timeout", async () => {
+    const never = () => new Promise<boolean>(() => undefined);
     await expect(checkReadiness({ database: never, storage: never, timeoutMs: 10 })).resolves.toBe(false);
   });
 });
 ```
 
-- [ ] **Step 3: Run focused tests and verify RED**
+Extend `tests/integration/s3-storage.test.ts` import with `checkObjectStorageReadiness`, then add:
 
-Run:
-
-```bash
-pnpm exec vitest run src/health/readiness.test.ts tests/integration/s3-storage.test.ts
+```ts
+it("proves the configured private bucket is reachable without mutation", async () => {
+  await expect(checkObjectStorageReadiness({ timeoutMs: 2_000 })).resolves.toBe(true);
+});
 ```
 
-Expected: FAIL because both exported readiness functions are missing.
+- [ ] **Step 2: Verify RED**
 
-- [ ] **Step 4: Extend the existing S3 boundary with signed HEAD**
+Run `pnpm exec vitest run src/health/readiness.test.ts tests/integration/s3-storage.test.ts`.
 
-Refactor only enough of `src/documents/storage.ts` to reuse its existing `requireConfiguration`, `objectUrl`, SHA/HMAC, and SigV4 helpers. Add a `HEAD` signer that signs an empty body and an exported probe:
+Expected: missing-export/module failures.
+
+- [ ] **Step 3: Add non-mutating signed S3 HEAD readiness**
+
+In `src/documents/storage.ts`, extend the existing internal request method union to include `HEAD`. Keep the current configuration parser, bucket URL builder, and SigV4 implementation as the single source of storage credentials.
+
+Add:
 
 ```ts
 export async function checkObjectStorageReadiness(
@@ -255,7 +220,6 @@ export async function checkObjectStorageReadiness(
   try {
     const config = requireConfiguration();
     const url = objectUrl(config, "");
-    url.pathname = url.pathname.replace(/\/$/, "");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -271,11 +235,11 @@ export async function checkObjectStorageReadiness(
 }
 ```
 
-Update the internal signer type from `"PUT" | "DELETE"` to `"PUT" | "DELETE" | "HEAD"`. Ensure bucket URL canonicalization matches MinIO/AWS path-style behavior and do not create/delete an object during readiness.
+Verify the canonical bucket path against the existing MinIO integration; preserve the trailing slash if the existing `objectUrl(config, "")` signer expects it.
 
-- [ ] **Step 5: Implement bounded dependency orchestration**
+- [ ] **Step 4: Implement database/storage orchestration**
 
-Create `src/health/readiness.ts`:
+`src/health/readiness.ts`:
 
 ```ts
 import { prisma } from "../db/prisma";
@@ -296,9 +260,9 @@ async function databaseReady() {
   }
 }
 
-function within<T>(promise: Promise<T>, timeoutMs: number): Promise<T | false> {
+async function bounded(value: Promise<boolean>, timeoutMs: number): Promise<boolean> {
   return Promise.race([
-    promise,
+    value.catch(() => false),
     new Promise<false>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
   ]);
 }
@@ -311,43 +275,36 @@ export async function checkReadiness(
   },
 ): Promise<boolean> {
   const [database, storage] = await Promise.all([
-    within(deps.database(), deps.timeoutMs),
-    within(deps.storage(), deps.timeoutMs),
+    bounded(deps.database(), deps.timeoutMs),
+    bounded(deps.storage(), deps.timeoutMs),
   ]);
-  return database === true && storage === true;
+  return database && storage;
 }
 ```
 
-Do not log raw credentials, URLs, SQL messages, or provider bodies from this layer.
+- [ ] **Step 5: Add readiness HTTP route and complete contract tests**
 
-- [ ] **Step 6: Add the readiness route and route contract tests**
-
-Create `app/api/health/ready/route.ts`:
+`app/api/health/ready/route.ts`:
 
 ```ts
 import { NextResponse } from "next/server";
-
 import { checkReadiness } from "../../../../src/health/readiness";
 import { getReleaseSha } from "../../../../src/health/release";
 
 export async function GET() {
   const ready = await checkReadiness();
   return NextResponse.json(
-    {
-      status: ready ? "ready" : "not_ready",
-      service: "dasigap",
-      release: getReleaseSha(),
-    },
+    { status: ready ? "ready" : "not_ready", service: "dasigap", release: getReleaseSha() },
     { status: ready ? 200 : 503, headers: { "Cache-Control": "no-store" } },
   );
 }
 ```
 
-In `tests/integration/health-api.test.ts`, mock `src/health/readiness` before importing the ready route and assert both 200 and 503 response shapes. The failure body must not contain strings such as `DATABASE_URL`, `OBJECT_STORAGE_ENDPOINT`, `postgres`, or a bucket name.
+In `tests/integration/health-api.test.ts`, use `vi.mock("../../src/health/readiness", ...)` before dynamically importing the ready route. Assert 200/`ready` and 503/`not_ready`; stringify the failure body and assert it does not contain `DATABASE_URL`, `OBJECT_STORAGE_ENDPOINT`, `postgresql://`, or `dasigap-ci-secret`.
 
-- [ ] **Step 7: Run unit/integration tests including real MinIO**
+- [ ] **Step 6: Verify with real MinIO and commit**
 
-Run the existing MinIO container sequence from `.github/workflows/ci.yml`, then:
+Use the existing CI MinIO startup command, then run:
 
 ```bash
 pnpm exec vitest run src/health/readiness.test.ts tests/integration/health-api.test.ts
@@ -359,24 +316,15 @@ OBJECT_STORAGE_ACCESS_KEY_ID=dasigap-ci \
 OBJECT_STORAGE_SECRET_ACCESS_KEY=dasigap-ci-secret \
 pnpm exec vitest run tests/integration/s3-storage.test.ts
 pnpm typecheck
-```
-
-Expected: PASS.
-
-- [ ] **Step 8: Add the readiness S3 assertion to CI and commit**
-
-Keep the existing MinIO startup step. The existing `Real S3 signed URL integration` command already executes `tests/integration/s3-storage.test.ts`, so no second container is needed; only ensure the new test runs in that file.
-
-Commit:
-
-```bash
-git add src/health app/api/health src/documents/storage.ts tests/integration/health-api.test.ts tests/integration/s3-storage.test.ts .github/workflows/ci.yml
+git add src/health app/api/health src/documents/storage.ts tests/integration/health-api.test.ts tests/integration/s3-storage.test.ts
 git commit -m "feat: add production readiness checks"
 ```
 
+Expected: all focused checks pass.
+
 ---
 
-### Task 3: Immutable Production Release Artifact
+### Task 3: Immutable Production Artifact
 
 **Files:**
 - Create: `ops/release/create-artifact.mjs`
@@ -385,26 +333,22 @@ git commit -m "feat: add production readiness checks"
 - Modify: `package.json`
 
 **Interfaces:**
-- Produces CLI: `node ops/release/create-artifact.mjs <commit-sha> <output-dir>`.
-- Produces: `<output-dir>/release-metadata.json` and `<output-dir>/dasigap-release-<sha>.tgz`.
-- Deploy workflow later consumes exactly those two files.
+- CLI: `node ops/release/create-artifact.mjs <commit-sha> <output-dir>`.
+- Artifact files: `release-metadata.json` and `dasigap-release-<sha>.tgz`.
 
-- [ ] **Step 1: Write RED artifact metadata tests**
-
-Create `ops/release/create-artifact.test.ts` around exported helpers from the module:
+- [ ] **Step 1: Write RED metadata tests**
 
 ```ts
 import { describe, expect, it } from "vitest";
-
 import { createReleaseMetadata, validateCommitSha } from "./create-artifact.mjs";
 
-describe("release artifact metadata", () => {
-  it("requires a full git SHA", () => {
-    expect(() => validateCommitSha("abc123")).toThrow();
-    expect(validateCommitSha("a".repeat(40))).toBe("a".repeat(40));
+describe("production artifact metadata", () => {
+  it("accepts only a full commit SHA", () => {
+    expect(() => validateCommitSha("abc123")).toThrow("full commit SHA");
+    expect(validateCommitSha("A".repeat(40))).toBe("a".repeat(40));
   });
 
-  it("records immutable non-secret identity", () => {
+  it("contains only immutable release identity", () => {
     expect(createReleaseMetadata("b".repeat(40), new Date("2026-08-29T00:00:00Z"))).toEqual({
       service: "dasigap",
       commitSha: "b".repeat(40),
@@ -416,129 +360,67 @@ describe("release artifact metadata", () => {
 });
 ```
 
-- [ ] **Step 2: Run focused artifact tests and verify RED**
+Run `pnpm exec vitest run ops/release/create-artifact.test.ts`; expect module-not-found RED.
 
-```bash
-pnpm exec vitest run ops/release/create-artifact.test.ts
+- [ ] **Step 2: Implement metadata and explicit allowlist packaging**
+
+The module must export:
+
+```js
+export function validateCommitSha(value) {
+  if (!/^[0-9a-f]{40}$/i.test(value)) throw new Error("full commit SHA required");
+  return value.toLowerCase();
+}
+
+export function createReleaseMetadata(commitSha, now = new Date()) {
+  return {
+    service: "dasigap",
+    commitSha: validateCommitSha(commitSha),
+    builtAt: now.toISOString(),
+    nodeMajor: 22,
+    packageManager: "pnpm@11.24.0",
+  };
+}
 ```
 
-Expected: FAIL because the module is missing.
-
-- [ ] **Step 3: Implement deterministic metadata and safe packaging**
-
-Create `ops/release/create-artifact.mjs` with named exports and a CLI guard. `validateCommitSha` accepts only `/^[0-9a-f]{40}$/`. `createReleaseMetadata` returns exactly the shape in the test. The CLI writes metadata at repository root temporarily, then invokes `tar` with an explicit allowlist rather than packaging `.`:
+The CLI validates `.next` exists, writes root `release-metadata.json`, and runs `tar -czf` with this exact allowlist:
 
 ```js
 const releasePaths = [
-  ".next",
-  "app",
-  "components",
-  "public",
-  "src",
-  "prisma",
-  "ops",
-  "package.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-  "next.config.ts",
+  ".next", "app", "components", "public", "src", "prisma", "ops",
+  "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "next.config.ts",
   "release-metadata.json",
 ];
 ```
 
-Reject a missing `.next` directory or missing required file. Never glob `.env*`.
+It then copies metadata into the output directory and deletes only the temporary root metadata file it created. It never packages `.` and never uses an `.env*` glob.
 
-- [ ] **Step 4: Add production artifact workflow**
+- [ ] **Step 3: Add build workflow from actual checked-out `main` SHA**
 
-Create `.github/workflows/build-production-release.yml` with:
+Create `.github/workflows/build-production-release.yml`. Reuse the existing CI versions for Postgres 17, Node 22, pnpm 11.24, MinIO, and Playwright. The workflow must `actions/checkout@v6` with `ref: main`, then capture the actual checkout SHA:
 
 ```yaml
-name: Build production release
-
-on:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: dasigap-production-release-artifact
-  cancel-in-progress: false
-
-jobs:
-  build-release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: dasigap
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U postgres -d dasigap"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/dasigap
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: main
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.24.0 --activate
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm db:generate
-      - run: pnpm prisma validate
-      - run: pnpm prisma migrate deploy
-      - run: pnpm typecheck
-      - run: pnpm test
-      - name: Start S3-compatible MinIO
-        run: |
-          docker run -d --name dasigap-minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=dasigap-ci \
-            -e MINIO_ROOT_PASSWORD=dasigap-ci-secret \
-            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
-          for attempt in $(seq 1 30); do
-            curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null && break
-            sleep 1
-          done
-          docker run --rm --network host --entrypoint /bin/sh \
-            minio/mc:RELEASE.2025-08-13T08-35-41Z \
-            -c 'mc alias set ci http://127.0.0.1:9000 dasigap-ci dasigap-ci-secret && mc mb --ignore-existing ci/dasigap-ci'
-      - name: Real S3 integration
-        env:
-          RUN_S3_INTEGRATION: "1"
-          OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:9000
-          OBJECT_STORAGE_REGION: us-east-1
-          OBJECT_STORAGE_BUCKET: dasigap-ci
-          OBJECT_STORAGE_ACCESS_KEY_ID: dasigap-ci
-          OBJECT_STORAGE_SECRET_ACCESS_KEY: dasigap-ci-secret
-        run: pnpm exec vitest run tests/integration/s3-storage.test.ts
-      - run: pnpm build
-      - run: pnpm test:e2e
-      - name: Package release
-        run: node ops/release/create-artifact.mjs "$(git rev-parse HEAD)" release-output
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dasigap-production-${{ github.sha }}
-          retention-days: 14
-          if-no-files-found: error
-          path: release-output/
+- name: Resolve release SHA
+  id: release
+  run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 ```
 
-During implementation, use an explicit step output for the checked-out `main` SHA if `${{ github.sha }}` does not reflect the checkout target on `workflow_dispatch`; artifact naming must use the actual `git rev-parse HEAD` value, not the dispatch event SHA.
+Required sequence: frozen install → Prisma generate/validate/migrate → typecheck → `pnpm test` → existing real MinIO S3 integration → `pnpm build` → `pnpm test:e2e` → artifact script → upload.
 
-- [ ] **Step 5: Add local verification script and run it**
+Artifact upload must use:
 
-Add to `package.json`:
+```yaml
+- uses: actions/upload-artifact@v4
+  with:
+    name: dasigap-production-${{ steps.release.outputs.sha }}
+    retention-days: 14
+    if-no-files-found: error
+    path: release-output/
+```
+
+- [ ] **Step 4: Verify artifact excludes secrets and commit**
+
+Add package script:
 
 ```json
 "verify:release-artifact": "vitest run ops/release/create-artifact.test.ts"
@@ -551,22 +433,18 @@ pnpm verify:release-artifact
 pnpm build
 rm -rf /tmp/dasigap-release-test
 node ops/release/create-artifact.mjs "$(git rev-parse HEAD)" /tmp/dasigap-release-test
-node -e 'const m=require("/tmp/dasigap-release-test/release-metadata.json"); if(m.service!=="dasigap") process.exit(1)'
-tar -tzf /tmp/dasigap-release-test/dasigap-release-*.tgz | grep -E '(^|/)\.env' && exit 1 || true
-```
-
-Expected: metadata is valid, archive is non-empty, and no `.env` path exists.
-
-- [ ] **Step 6: Commit artifact building**
-
-```bash
+test -s /tmp/dasigap-release-test/release-metadata.json
+test -s /tmp/dasigap-release-test/dasigap-release-$(git rev-parse HEAD).tgz
+if tar -tzf /tmp/dasigap-release-test/dasigap-release-$(git rev-parse HEAD).tgz | grep -E '(^|/)\.env'; then exit 1; fi
 git add ops/release/create-artifact.mjs ops/release/create-artifact.test.ts .github/workflows/build-production-release.yml package.json
 git commit -m "feat: build immutable production releases"
 ```
 
+Expected: all checks pass and archive contains no `.env` path.
+
 ---
 
-### Task 4: Server Release Runtime, Candidate Validation, and Atomic Switch
+### Task 4: Server Runtime, Candidate Gate, Atomic Switch, and Rollback Primitive
 
 **Files:**
 - Create: `ops/release/common.sh`
@@ -578,51 +456,80 @@ git commit -m "feat: build immutable production releases"
 - Modify: `package.json`
 
 **Interfaces:**
-- `common.sh`: `require_full_sha`, `release_path`, `read_release_sha`, `atomic_link`, `wait_for_health`.
-- `prepare-release.sh <staging-dir> <sha>` prepares `$DASIGAP_ROOT/releases/<sha>` and runs migration once for a new release.
-- `validate-candidate.sh <release-dir> <sha>` exits 0 only when live and ready both report the exact SHA.
-- `switch-release.sh <sha> <production-base-url>` performs atomic switch, PM2 reload, post-switch validation, and automatic application rollback.
-- PM2 process name: `dasigap`.
+- `common.sh` exports `require_full_sha`, `release_path`, `read_release_sha`, `atomic_link`, `wait_for_health`, `restore_release`.
+- Testability overrides: `PM2_BIN`, `CURL_BIN`, and `CANDIDATE_VALIDATOR` default to `pm2`, `curl`, and the tracked candidate script.
+- `prepare-release.sh <staging-dir> <sha>` creates/reuses immutable release.
+- `validate-candidate.sh <release-dir> <sha>` exits 0 only for exact-SHA live + ready success.
+- `switch-release.sh <sha> <https-production-base-url>` switches only after candidate success and restores old `current` on post-switch failure.
 
-- [ ] **Step 1: Write RED shell-boundary tests**
+- [ ] **Step 1: Write RED shell behavior tests with real temporary symlinks**
 
-Create `tests/ops/release-scripts.test.ts`. Use `mkdtemp`, `execFile`, and a temporary `DASIGAP_ROOT`. Initial tests must verify:
+Create `tests/ops/release-scripts.test.ts` with these fixture helpers:
 
 ```ts
-it("rejects a non-full SHA before constructing a release path", async () => { /* expect exit != 0 */ });
-it("never allows target_sha path traversal", async () => { /* ../../etc/passwd rejected */ });
-it("atomically points current at an installed release and previous at the old release", async () => { /* inspect readlink */ });
-it("keeps current unchanged when candidate validation fails", async () => { /* stub validator non-zero */ });
-it("restores the old current when post-switch production health fails", async () => { /* stub curl failure after switch */ });
+import { chmod, mkdir, mkdtemp, readlink, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { execFile } from "node:child_process";
+import { beforeEach, describe, expect, it } from "vitest";
+
+const exec = promisify(execFile);
+let root = "";
+let bin = "";
+
+async function executable(name: string, body: string) {
+  const path = join(bin, name);
+  await writeFile(path, `#!/usr/bin/env bash\nset -Eeuo pipefail\n${body}\n`);
+  await chmod(path, 0o755);
+  return path;
+}
+
+async function installed(sha: string) {
+  const dir = join(root, "releases", sha);
+  await mkdir(join(dir, "ops", "pm2"), { recursive: true });
+  await writeFile(join(dir, "release-metadata.json"), JSON.stringify({ service: "dasigap", commitSha: sha }));
+  await writeFile(join(dir, "ops", "pm2", "ecosystem.config.cjs"), "module.exports={apps:[]};\n");
+  return dir;
+}
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), "dasigap-release-"));
+  bin = join(root, "bin");
+  await mkdir(join(root, "releases"), { recursive: true });
+  await mkdir(join(root, "shared"), { recursive: true });
+  await mkdir(bin);
+  await writeFile(join(root, "shared", ".env.production"), "PORT=3000\n");
+});
 ```
 
-The test harness supplies stub executables earlier in `PATH` for `pm2`, `curl`, and candidate startup so no real server process is required for atomic-link behavior tests.
+First RED test:
 
-- [ ] **Step 2: Verify RED**
-
-```bash
-pnpm exec vitest run tests/ops/release-scripts.test.ts
+```ts
+it("rejects traversal instead of constructing a release path", async () => {
+  await expect(exec("bash", ["-c", `source ops/release/common.sh; release_path '../../etc/passwd'`], {
+    env: { ...process.env, DASIGAP_ROOT: root },
+  })).rejects.toMatchObject({ code: 64 });
+});
 ```
 
-Expected: FAIL because the scripts do not exist.
+Run `pnpm exec vitest run tests/ops/release-scripts.test.ts`; expect RED because scripts are missing.
 
-- [ ] **Step 3: Implement shared fail-closed shell helpers**
+- [ ] **Step 2: Implement fail-closed shared helpers**
 
-Create `ops/release/common.sh` beginning with:
+`ops/release/common.sh` begins:
 
 ```bash
 #!/usr/bin/env bash
 set -Eeuo pipefail
-
 DASIGAP_ROOT="${DASIGAP_ROOT:-/home/ubuntu/dasigap}"
 DASIGAP_RELEASES="$DASIGAP_ROOT/releases"
 DASIGAP_SHARED="$DASIGAP_ROOT/shared"
+PM2_BIN="${PM2_BIN:-pm2}"
+CURL_BIN="${CURL_BIN:-curl}"
 
 require_full_sha() {
-  [[ "${1:-}" =~ ^[0-9a-f]{40}$ ]] || {
-    echo "invalid release sha" >&2
-    return 64
-  }
+  [[ "${1:-}" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid release sha" >&2; return 64; }
 }
 
 release_path() {
@@ -631,12 +538,7 @@ release_path() {
 }
 
 read_release_sha() {
-  node -e '
-    const fs=require("node:fs");
-    const m=JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    if(m.service!=="dasigap" || !/^[0-9a-f]{40}$/.test(m.commitSha)) process.exit(65);
-    process.stdout.write(m.commitSha);
-  ' "$1/release-metadata.json"
+  node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync(process.argv[1]+"/release-metadata.json","utf8")); if(m.service!=="dasigap"||!/^[0-9a-f]{40}$/.test(m.commitSha)) process.exit(65); process.stdout.write(m.commitSha)' "$1"
 }
 
 atomic_link() {
@@ -646,111 +548,61 @@ atomic_link() {
 }
 ```
 
-Add `wait_for_health <url> <sha> <expected-status>` that uses `curl --fail --silent --show-error --max-time 3`, retries a bounded number of times, parses JSON with Node, and requires the body release to equal the requested SHA. Do not echo response bodies on failure.
+`wait_for_health <url> <sha> <status>` performs at most 20 attempts with `--max-time 3`, pipes successful JSON to a Node one-liner that requires exact `status` and `release`, and sleeps 1 second between attempts. It never prints response bodies.
 
-- [ ] **Step 4: Implement immutable release preparation**
+`restore_release <old-target>` atomically restores `current` and runs `$PM2_BIN startOrReload` using the restored release's tracked ecosystem file.
 
-`ops/release/prepare-release.sh <staging-dir> <sha>` must:
+- [ ] **Step 3: Implement immutable preparation with dev tooling available**
+
+`prepare-release.sh` validates `shared/.env.production`, sources it only after metadata/path validation, and runs:
 
 ```bash
-source "$(dirname "$0")/common.sh"
-require_full_sha "$2"
-target="$(release_path "$2")"
-
-[[ -f "$DASIGAP_SHARED/.env.production" ]] || { echo "missing production env" >&2; exit 66; }
-[[ "$(read_release_sha "$1")" == "$2" ]] || exit 65
-
-if [[ -e "$target" ]]; then
-  [[ "$(read_release_sha "$target")" == "$2" ]] || exit 65
-  exit 0
-fi
-
-set -a
-source "$DASIGAP_SHARED/.env.production"
-set +a
-
-cd "$1"
-pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile --prod=false
 pnpm db:generate
 pnpm prisma migrate deploy
-cd "$DASIGAP_ROOT"
-mv "$1" "$target"
 ```
 
-The implementation must ensure staging and releases are on the same filesystem and must clean only its own temporary staging directory on failure.
+The explicit `--prod=false` is mandatory because production env may contain `NODE_ENV=production` while Prisma CLI is a devDependency. Move staging into `releases/<sha>` only after all three commands succeed. Reuse an existing release only if metadata matches exactly; never overwrite an existing release directory.
 
-- [ ] **Step 5: Implement candidate validation**
+- [ ] **Step 4: Implement candidate validation**
 
-`ops/release/validate-candidate.sh <release-dir> <sha>` must load `shared/.env.production`, use `HOSTNAME=127.0.0.1`, override `PORT=${DASIGAP_CANDIDATE_PORT:-3101}` and `DASIGAP_RELEASE_SHA`, start the release-local `next start` as a temporary background process, trap cleanup, wait for `/api/health/live`, then `/api/health/ready`, and always stop the candidate before returning.
-
-Core shape:
+`validate-candidate.sh` sources the host env, overrides only loopback host/port/release SHA, starts release-local Next, and traps cleanup:
 
 ```bash
-HOSTNAME=127.0.0.1 PORT="$candidate_port" DASIGAP_RELEASE_SHA="$sha" \
+HOSTNAME=127.0.0.1 PORT="${DASIGAP_CANDIDATE_PORT:-3101}" DASIGAP_RELEASE_SHA="$sha" \
   pnpm --dir "$release_dir" exec next start >"$candidate_log" 2>&1 &
 candidate_pid=$!
-trap 'kill "$candidate_pid" 2>/dev/null || true; wait "$candidate_pid" 2>/dev/null || true' EXIT
-wait_for_health "http://127.0.0.1:$candidate_port/api/health/live" "$sha" ok
-wait_for_health "http://127.0.0.1:$candidate_port/api/health/ready" "$sha" ready
+trap 'kill "$candidate_pid" 2>/dev/null || true; wait "$candidate_pid" 2>/dev/null || true; rm -f "$candidate_log"' EXIT
+wait_for_health "http://127.0.0.1:${DASIGAP_CANDIDATE_PORT:-3101}/api/health/live" "$sha" ok
+wait_for_health "http://127.0.0.1:${DASIGAP_CANDIDATE_PORT:-3101}/api/health/ready" "$sha" ready
 ```
 
-Do not print the loaded environment file or candidate process environment.
+- [ ] **Step 5: Implement PM2 runtime**
 
-- [ ] **Step 6: Implement tracked PM2 runtime**
+`ops/pm2/ecosystem.config.cjs` loads `${DASIGAP_ROOT}/shared/.env.production` with Node 22 `process.loadEnvFile`, reads `${DASIGAP_ROOT}/current/release-metadata.json`, validates service/full SHA, and runs `${current}/node_modules/next/dist/bin/next start` with `HOSTNAME=127.0.0.1`, configured `PORT`, and metadata SHA as `DASIGAP_RELEASE_SHA`. No literal credentials are allowed in the tracked file.
 
-Create `ops/pm2/ecosystem.config.cjs`. It must resolve root/current/shared, load only the host env file, validate release metadata, and run the release-local Next binary. Example structure:
+- [ ] **Step 6: Implement switch + post-switch restore**
 
-```js
-const fs = require("node:fs");
-const path = require("node:path");
+`switch-release.sh` validates HTTPS base URL with Node's `URL` parser before mutation. Sequence: validate SHA/metadata → candidate validate target → capture old current → set previous to old current → atomic current switch → PM2 reload → exact-SHA local live/ready → exact-SHA external HTTPS ready.
 
-const root = process.env.DASIGAP_ROOT || "/home/ubuntu/dasigap";
-const current = path.join(root, "current");
-const envFile = path.join(root, "shared", ".env.production");
-process.loadEnvFile(envFile);
-const metadata = JSON.parse(fs.readFileSync(path.join(current, "release-metadata.json"), "utf8"));
-if (metadata.service !== "dasigap" || !/^[0-9a-f]{40}$/.test(metadata.commitSha)) {
-  throw new Error("Invalid release metadata");
-}
+After `current` changes, any PM2/local/external failure calls `restore_release "$old"` when old exists and returns non-zero. First-deploy failure with no old release remains failed and does not fabricate rollback state.
 
-module.exports = {
-  apps: [{
-    name: "dasigap",
-    cwd: current,
-    script: path.join(current, "node_modules", "next", "dist", "bin", "next"),
-    args: "start",
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      HOSTNAME: "127.0.0.1",
-      PORT: process.env.PORT || "3000",
-      DASIGAP_RELEASE_SHA: metadata.commitSha,
-    },
-    autorestart: true,
-    max_restarts: 5,
-    min_uptime: "10s",
-  }],
-};
+- [ ] **Step 7: Complete GREEN atomic/restore tests**
+
+Create stubs with the fixture helper:
+
+```ts
+const pm2 = await executable("pm2", `echo "$*" >> "${root}/pm2.log"`);
+const candidateOk = await executable("candidate-ok", "exit 0");
+const candidateFail = await executable("candidate-fail", "exit 9");
+const curlFail = await executable("curl-fail", "exit 22");
 ```
 
-- [ ] **Step 7: Implement switch and automatic rollback**
+For successful health, create a `curl-ok` stub per test with the expected SHA embedded in its script body so it outputs exact JSON for both `ok` and `ready` requests based on URL suffix. Tests assert invalid SHA exits 64; candidate failure preserves current; successful switch sets current target/previous old; post-switch failure restores old and exits non-zero. Inject `PM2_BIN`, `CURL_BIN`, and `CANDIDATE_VALIDATOR` through env so no real PM2/network is used.
 
-`ops/release/switch-release.sh <sha> <production-base-url>` must:
+- [ ] **Step 8: Verify and commit**
 
-1. validate the SHA and installed metadata;
-2. run `validate-candidate.sh` before link changes;
-3. capture old `current` target if any;
-4. atomically set `previous` to old target when present;
-5. atomically set `current` to the candidate;
-6. run `pm2 startOrReload "$candidate/ops/pm2/ecosystem.config.cjs" --update-env`;
-7. require local production ready + external HTTPS ready with exact SHA;
-8. on any failure after the switch, restore old `current`, reload old PM2, probe restored local health, and return non-zero.
-
-Use an `ERR` trap only after `current` has changed, and explicitly disable the trap while performing rollback to avoid recursion.
-
-- [ ] **Step 8: Run shell syntax and ops behavior tests**
-
-Add to `package.json`:
+Add package scripts:
 
 ```json
 "test:ops": "vitest run tests/ops/release-scripts.test.ts",
@@ -762,68 +614,56 @@ Run:
 ```bash
 pnpm test:ops
 pnpm check:ops
-node -e 'require("./ops/pm2/ecosystem.config.cjs")' # run only with a temp DASIGAP_ROOT fixture in the test harness
-```
-
-Expected: PASS.
-
-- [ ] **Step 9: Commit runtime release switching**
-
-```bash
-git add ops/release ops/pm2 tests/ops package.json
+pnpm typecheck
+git add ops/release/common.sh ops/release/prepare-release.sh ops/release/validate-candidate.sh ops/release/switch-release.sh ops/pm2/ecosystem.config.cjs tests/ops/release-scripts.test.ts package.json
 git commit -m "feat: add atomic production release switching"
 ```
 
+Expected: GREEN.
+
 ---
 
-### Task 5: Manual Deploy Workflow with Artifact Validation
+### Task 5: Deploy Workflow and Downloaded Artifact Validation
 
 **Files:**
-- Create: `.github/workflows/deploy-production-release.yml`
 - Create: `ops/release/validate-artifact.mjs`
 - Create: `ops/release/validate-artifact.test.ts`
+- Create: `tests/ops/workflows.test.ts`
+- Create: `.github/workflows/deploy-production-release.yml`
 - Modify: `package.json`
 
 **Interfaces:**
-- Workflow input: required `release_run_id` string containing digits only.
-- Required production secrets: `PRODUCTION_HOST`, `PRODUCTION_USER`, `PRODUCTION_SSH_KEY`, `PRODUCTION_KNOWN_HOSTS`, `PRODUCTION_BASE_URL`; optional `PRODUCTION_SSH_PORT` defaults to 22.
-- `validate-artifact.mjs <metadata-path> <archive-path>` prints validated commit SHA only.
-- Server executes `prepare-release.sh`, then `switch-release.sh`.
+- Workflow input `release_run_id`: digits only.
+- Production secrets: `PRODUCTION_HOST`, `PRODUCTION_USER`, `PRODUCTION_SSH_KEY`, `PRODUCTION_KNOWN_HOSTS`, `PRODUCTION_BASE_URL`; optional `PRODUCTION_SSH_PORT` defaults to `22`.
+- `validate-artifact.mjs <metadata> <archive>` prints validated SHA only.
 
-- [ ] **Step 1: Write RED artifact validation tests**
-
-Create `ops/release/validate-artifact.test.ts`:
+- [ ] **Step 1: Write RED artifact validator test**
 
 ```ts
 import { describe, expect, it } from "vitest";
 import { validateArtifactMetadata } from "./validate-artifact.mjs";
 
-describe("production artifact validation", () => {
-  it("accepts only dasigap metadata with a full SHA", () => {
+describe("downloaded production artifact", () => {
+  it("accepts only Dasigap metadata with a full SHA", () => {
     expect(validateArtifactMetadata({ service: "dasigap", commitSha: "a".repeat(40) })).toBe("a".repeat(40));
     expect(() => validateArtifactMetadata({ service: "other", commitSha: "a".repeat(40) })).toThrow();
-    expect(() => validateArtifactMetadata({ service: "dasigap", commitSha: "../main" })).toThrow();
+    expect(() => validateArtifactMetadata({ service: "dasigap", commitSha: "../../etc" })).toThrow();
   });
 });
 ```
 
-- [ ] **Step 2: Run RED and implement validator**
+Run `pnpm exec vitest run ops/release/validate-artifact.test.ts`; expect RED.
 
-Run:
+- [ ] **Step 2: Implement validator**
 
-```bash
-pnpm exec vitest run ops/release/validate-artifact.test.ts
-```
+Export `validateArtifactMetadata(value)` and CLI behavior. Require `service === "dasigap"`, lowercase/full SHA, and `stat(archive).size > 0`. CLI stdout contains only SHA; errors go to stderr with generic messages.
 
-Then create `ops/release/validate-artifact.mjs` that parses JSON, requires `service === "dasigap"`, requires `/^[0-9a-f]{40}$/`, requires a non-empty archive file, and prints only the SHA on success. Re-run the test and expect PASS.
+- [ ] **Step 3: Create deploy workflow with run provenance gate**
 
-- [ ] **Step 3: Implement deploy workflow preflight**
-
-Create `.github/workflows/deploy-production-release.yml`:
+Workflow skeleton:
 
 ```yaml
 name: Deploy production release
-
 on:
   workflow_dispatch:
     inputs:
@@ -831,14 +671,9 @@ on:
         description: Successful Build production release run ID
         required: true
         type: string
-
 permissions:
   actions: read
   contents: read
-
-env:
-  DASIGAP_ROOT: /home/ubuntu/dasigap
-
 jobs:
   deploy:
     environment: production
@@ -849,18 +684,11 @@ jobs:
       cancel-in-progress: false
 ```
 
-First steps must reject a non-numeric run ID, query `GET /repos/${GITHUB_REPOSITORY}/actions/runs/<id>` using `gh api`, and require all of:
+Before download, reject non-digits. Use `gh api repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID` and require `event == workflow_dispatch`, `conclusion == success`, and workflow identity/path equals `build-production-release.yml`. Check out `main`, fetch enough history, and require source run `head_sha` to be contained by `origin/main`.
 
-- run event is `workflow_dispatch`;
-- conclusion is `success`;
-- workflow path/name resolves to `build-production-release.yml`;
-- run head SHA is in `main` history.
+Download via `actions/download-artifact@v4` using `run-id` and `github-token`; never accept caller-provided artifact names or server paths. Run `validate-artifact.mjs` and require validated SHA equals source run `head_sha`.
 
-Use `actions/download-artifact@v4` with `run-id` and `github-token`, not a caller-supplied artifact name/path. Validate the downloaded metadata/archive locally with `validate-artifact.mjs`.
-
-- [ ] **Step 4: Pin SSH trust and upload to a unique staging path**
-
-Workflow SSH setup must use:
+- [ ] **Step 4: Pin SSH trust and deploy through unique staging**
 
 ```bash
 install -m 700 -d ~/.ssh
@@ -870,66 +698,60 @@ printf '%s\n' "$PRODUCTION_SSH_KEY" > ~/.ssh/id_ed25519
 chmod 600 ~/.ssh/id_ed25519
 ```
 
-Never call `ssh-keyscan`. Compute port from `${PRODUCTION_SSH_PORT:-22}`. Upload the archive and metadata to a server path generated only from validated SHA, for example:
+Validate `PRODUCTION_BASE_URL` with Node and require `https:`. Default SSH port with `${PRODUCTION_SSH_PORT:-22}`. Remote staging path is `/home/ubuntu/dasigap/.staging/<validated-sha>-<deploy-workflow-run-id>`. Upload metadata/archive with pinned-host `scp`; remote `bash -s --` receives only validated SHA, run ID, and HTTPS base URL as positional args, extracts under staging, verifies metadata again, runs staged `prepare-release.sh`, then installed `switch-release.sh`.
 
-```text
-$DASIGAP_ROOT/.staging/<sha>-<github-run-id>/
+- [ ] **Step 5: Add deploy workflow static security test**
+
+`tests/ops/workflows.test.ts` at this task contains only the deploy assertion:
+
+```ts
+import { readFile } from "node:fs/promises";
+import { describe, expect, it } from "vitest";
+
+describe("production workflows", () => {
+  it("deploy is manual, protected, serialized, and pins SSH trust", async () => {
+    const yaml = await readFile(".github/workflows/deploy-production-release.yml", "utf8");
+    expect(yaml).toContain("workflow_dispatch:");
+    expect(yaml).toContain("environment: production");
+    expect(yaml).toContain("group: dasigap-production-deploy");
+    expect(yaml).toContain("cancel-in-progress: false");
+    expect(yaml).toContain("PRODUCTION_KNOWN_HOSTS");
+    expect(yaml).not.toContain("ssh-keyscan");
+    expect(yaml).not.toContain("StrictHostKeyChecking=no");
+    expect(yaml).not.toContain("git pull");
+  });
+});
 ```
 
-Create the remote directory with quoted positional parameters passed to `bash -s --`, not shell interpolation of unvalidated input.
+- [ ] **Step 6: Verify and commit**
 
-- [ ] **Step 5: Extract, prepare, and switch on the host**
+Add:
 
-The remote script must:
-
-```bash
-set -Eeuo pipefail
-root="${DASIGAP_ROOT:-/home/ubuntu/dasigap}"
-staging="$root/.staging/$sha-$deploy_run_id"
-mkdir -p "$root/releases" "$root/shared" "$root/.staging"
-tar -xzf "$staging/dasigap-release-$sha.tgz" -C "$staging/release"
-"$staging/release/ops/release/prepare-release.sh" "$staging/release" "$sha"
-"$root/releases/$sha/ops/release/switch-release.sh" "$sha" "$production_base_url"
+```json
+"verify:deploy": "vitest run ops/release/validate-artifact.test.ts tests/ops/workflows.test.ts"
 ```
-
-Pass `production_base_url` from the GitHub secret as a positional argument and require it to parse as HTTPS before SSH. Do not put it into repository code.
-
-- [ ] **Step 6: Add deploy workflow static checks to CI**
-
-Add tests or a small Node YAML/text invariant test under `tests/ops/workflows.test.ts` that reads all production workflows and requires:
-
-- `workflow_dispatch` present;
-- `environment: production` present on deploy/rollback;
-- `cancel-in-progress: false`;
-- no `ssh-keyscan`;
-- no `git pull`;
-- no secret values printed with `set -x`.
 
 Run:
 
 ```bash
-pnpm exec vitest run ops/release/validate-artifact.test.ts tests/ops/workflows.test.ts
-pnpm test
+pnpm verify:deploy
+pnpm check:ops
 pnpm typecheck
-```
-
-Expected: PASS.
-
-- [ ] **Step 7: Commit production deployment workflow**
-
-```bash
-git add .github/workflows/deploy-production-release.yml ops/release/validate-artifact.mjs ops/release/validate-artifact.test.ts tests/ops/workflows.test.ts package.json
+git add ops/release/validate-artifact.mjs ops/release/validate-artifact.test.ts tests/ops/workflows.test.ts .github/workflows/deploy-production-release.yml package.json
 git commit -m "feat: add production deployment workflow"
 ```
 
+Expected: GREEN.
+
 ---
 
-### Task 6: Manual Rollback, Retention, Documentation, and Full Release Gate
+### Task 6: Manual Rollback, Retention, CI Gate, and Release Documentation
 
 **Files:**
 - Create: `ops/release/rollback-release.sh`
 - Create: `ops/release/cleanup-releases.sh`
 - Create: `.github/workflows/rollback-production-release.yml`
+- Modify: `ops/release/switch-release.sh`
 - Modify: `tests/ops/release-scripts.test.ts`
 - Modify: `tests/ops/workflows.test.ts`
 - Modify: `.github/workflows/ci.yml`
@@ -938,62 +760,50 @@ git commit -m "feat: add production deployment workflow"
 - Modify: `package.json`
 
 **Interfaces:**
-- Rollback workflow input: `target_sha` full 40-character lowercase hexadecimal SHA.
-- `rollback-release.sh <target-sha> <production-base-url>` never migrates DB and leaves `current` untouched until target candidate passes.
-- `cleanup-releases.sh` preserves resolved `current`, resolved `previous`, and three newest additional release directories.
+- Rollback input `target_sha`: exact full lowercase commit SHA already installed on server.
+- `rollback-release.sh <target-sha> <https-production-base-url>` does not install dependencies or migrate DB.
+- `cleanup-releases.sh` preserves resolved current, resolved previous, and three newest additional SHA directories.
+- `switch-release.sh` invokes cleanup only after successful external readiness.
 
-- [ ] **Step 1: Extend RED ops tests for manual rollback and retention**
+- [ ] **Step 1: Add RED manual rollback test**
 
-Add tests to `tests/ops/release-scripts.test.ts`:
+Using Task 4 fixtures:
 
 ```ts
-it("does not run prisma migrate during manual rollback", async () => { /* stub pnpm and assert no migrate call */ });
-it("leaves current untouched when rollback target candidate is unhealthy", async () => { /* expect same readlink */ });
-it("sets previous to the formerly active release after successful rollback", async () => { /* inspect both links */ });
-it("cleanup keeps current, previous, and three additional newest releases", async () => { /* create timestamped fixtures */ });
+it("leaves current unchanged when rollback target candidate is unhealthy", async () => {
+  const oldSha = "1".repeat(40);
+  const targetSha = "2".repeat(40);
+  const old = await installed(oldSha);
+  await installed(targetSha);
+  await symlink(old, join(root, "current"));
+  const candidateFail = await executable("candidate-fail", "exit 9");
+  await expect(exec("bash", ["ops/release/rollback-release.sh", targetSha, "https://dasigap.invalid"], {
+    env: { ...process.env, DASIGAP_ROOT: root, CANDIDATE_VALIDATOR: candidateFail },
+  })).rejects.toBeTruthy();
+  expect(await readlink(join(root, "current"))).toBe(old);
+});
 ```
 
-- [ ] **Step 2: Implement manual rollback script**
+Add a successful rollback test with candidate/curl/PM2 stubs and assert `current == target`, `previous == old`, and PM2 was invoked. Run `pnpm test:ops`; expect missing-script RED.
 
-Create `ops/release/rollback-release.sh`:
+- [ ] **Step 2: Implement manual rollback using shared restore logic**
 
-```bash
-#!/usr/bin/env bash
-set -Eeuo pipefail
-source "$(dirname "$0")/common.sh"
+`rollback-release.sh` validates SHA/HTTPS base URL, requires installed metadata match, runs `${CANDIDATE_VALIDATOR:-$target/ops/release/validate-candidate.sh}` before link mutation, captures old current, atomically updates previous/current, reloads PM2, requires local/external exact-SHA readiness, and restores old current with `restore_release` on post-switch failure. It contains no `pnpm install`, `prisma generate`, or `prisma migrate deploy`.
 
-sha="${1:?target sha required}"
-base_url="${2:?production base url required}"
-require_full_sha "$sha"
-target="$(release_path "$sha")"
-[[ -d "$target" ]] || { echo "release not installed" >&2; exit 67; }
-[[ "$(read_release_sha "$target")" == "$sha" ]] || exit 65
+- [ ] **Step 3: Implement safe retention and its deterministic test**
 
-"$target/ops/release/validate-candidate.sh" "$target" "$sha"
-old=""
-[[ -L "$DASIGAP_ROOT/current" ]] && old="$(readlink -f "$DASIGAP_ROOT/current")"
-[[ -n "$old" ]] && atomic_link "$old" "$DASIGAP_ROOT/previous"
-atomic_link "$target" "$DASIGAP_ROOT/current"
-pm2 startOrReload "$target/ops/pm2/ecosystem.config.cjs" --update-env
-wait_for_health "http://127.0.0.1:${PORT:-3000}/api/health/ready" "$sha" ready
-wait_for_health "$base_url/api/health/ready" "$sha" ready
-```
+`cleanup-releases.sh` uses immediate children only, accepts directory names matching `^[0-9a-f]{40}$`, resolves current/previous, protects them plus the three newest remaining SHA directories by mtime, and removes only older validated immediate children.
 
-If post-switch verification fails, use the same restoration helper as normal deploy to put `old` back; do not duplicate two different rollback algorithms.
+Create six installed SHA fixtures, set mtimes with `utimes`, point current/previous to two of them, run cleanup, and assert exactly current + previous + three newest extras remain.
 
-- [ ] **Step 3: Implement safe release cleanup**
+Modify successful `switch-release.sh` and `rollback-release.sh` to invoke cleanup only after external readiness succeeds. Cleanup failure emits a generic warning and does not fail a healthy deployment; cleanup never runs during failed recovery.
 
-Create `ops/release/cleanup-releases.sh` that gathers only immediate child directory names matching `^[0-9a-f]{40}$`, resolves `current` and `previous`, sorts remaining release directories by modification time, protects the three newest extras, then removes only unprotected matching release directories. Never call `rm -rf` on a path assembled from unvalidated external input.
+- [ ] **Step 4: Add rollback workflow and static assertion**
 
-Run cleanup only after successful external post-switch readiness, never after failed deploy/rollback.
-
-- [ ] **Step 4: Add rollback workflow**
-
-Create `.github/workflows/rollback-production-release.yml`:
+Workflow skeleton:
 
 ```yaml
 name: Rollback production release
-
 on:
   workflow_dispatch:
     inputs:
@@ -1001,10 +811,8 @@ on:
         description: Installed release commit SHA
         required: true
         type: string
-
 permissions:
   contents: read
-
 jobs:
   rollback:
     environment: production
@@ -1015,17 +823,26 @@ jobs:
       cancel-in-progress: false
 ```
 
-Validate `target_sha` locally before SSH, configure the same pinned known-hosts SSH setup as deploy, and invoke only:
+Validate full SHA and HTTPS base URL before SSH, configure the same pinned known-hosts setup as deploy, and invoke only the installed target rollback script. Workflow must contain no artifact download, package install, `git`, or Prisma migration.
 
-```bash
-$DASIGAP_ROOT/releases/$target_sha/ops/release/rollback-release.sh "$target_sha" "$PRODUCTION_BASE_URL"
+Append to `tests/ops/workflows.test.ts`:
+
+```ts
+it("rollback is protected, serialized, and never migrates", async () => {
+  const yaml = await readFile(".github/workflows/rollback-production-release.yml", "utf8");
+  expect(yaml).toContain("workflow_dispatch:");
+  expect(yaml).toContain("environment: production");
+  expect(yaml).toContain("group: dasigap-production-deploy");
+  expect(yaml).toContain("PRODUCTION_KNOWN_HOSTS");
+  expect(yaml).not.toContain("prisma migrate");
+  expect(yaml).not.toContain("pnpm install");
+  expect(yaml).not.toContain("ssh-keyscan");
+});
 ```
 
-The workflow must not download artifacts, run `pnpm install`, run `prisma migrate deploy`, or call `git` on the server.
+- [ ] **Step 5: Document safe settings and rollout gates**
 
-- [ ] **Step 5: Document non-secret runtime contract**
-
-Append safe defaults/comments to `.env.example` without real production values:
+Append to `.env.example`:
 
 ```dotenv
 DASIGAP_RELEASE_SHA=
@@ -1034,45 +851,26 @@ PORT=3000
 DASIGAP_CANDIDATE_PORT=3101
 ```
 
-Do not add GitHub SSH secrets or a real production hostname to `.env.example`.
+Update `docs/release/mvp-checklist.md` to require: GitHub `production` environment/secrets; Node22/Corepack/pnpm/PM2/Nginx prerequisites; host-only `shared/.env.production`; exact HTTPS BloomBouquet callback registration; successful release build; successful deploy reporting exact SHA; browser auth/session/logout smoke; private document upload/read/delete smoke; manual rollback + forward deploy exercise; destructive/incompatible migration handled by separate approved operations plan.
 
-- [ ] **Step 6: Update release checklist with exact rollout gates**
+- [ ] **Step 6: Wire ops gates into existing CI**
 
-In `docs/release/mvp-checklist.md`, require before first production deploy:
-
-1. GitHub `production` environment exists.
-2. SSH secrets and pinned known-hosts are configured.
-3. Host Node 22/Corepack/PM2/Nginx prerequisites are installed.
-4. `shared/.env.production` contains production PostgreSQL, private storage, and BloomBouquet OAuth configuration and is permissions-restricted.
-5. Exact HTTPS BloomBouquet callback URI is registered centrally.
-6. Build production release workflow succeeds for `main` SHA.
-7. Deploy workflow succeeds and external `/api/health/ready` reports that SHA.
-8. Real browser smoke: authorize → callback → Dasigap session → protected API → logout.
-9. Upload/read/delete private document smoke succeeds.
-10. Manual rollback is exercised to an installed compatible release and forward deploy is exercised again.
-
-Also state that destructive DB migrations require a separate operations plan and are blocked from the normal release path.
-
-- [ ] **Step 7: Wire ops gates into normal CI**
-
-Add to `package.json`:
+Package script:
 
 ```json
 "verify:ops": "pnpm check:ops && vitest run tests/ops ops/release/create-artifact.test.ts ops/release/validate-artifact.test.ts"
 ```
 
-In `.github/workflows/ci.yml`, after typecheck add:
+Extend `check:ops` with rollback/cleanup scripts. Add after typecheck in `.github/workflows/ci.yml`:
 
 ```yaml
 - name: Production operations verification
   run: pnpm verify:ops
 ```
 
-Keep all existing unit/integration/security, MinIO, build, and Playwright gates intact.
+Do not remove/relax existing Prisma, unit/integration/security, MinIO, build, or Playwright gates.
 
-- [ ] **Step 8: Run the complete local/CI-equivalent gate**
-
-Run:
+- [ ] **Step 7: Run full release gate**
 
 ```bash
 pnpm install --frozen-lockfile
@@ -1082,50 +880,47 @@ pnpm prisma migrate deploy
 pnpm typecheck
 pnpm verify:ops
 pnpm test
-# Start MinIO exactly as CI does, then run the real S3 integration.
+RUN_S3_INTEGRATION=1 \
+OBJECT_STORAGE_ENDPOINT=http://127.0.0.1:9000 \
+OBJECT_STORAGE_REGION=us-east-1 \
+OBJECT_STORAGE_BUCKET=dasigap-ci \
+OBJECT_STORAGE_ACCESS_KEY_ID=dasigap-ci \
+OBJECT_STORAGE_SECRET_ACCESS_KEY=dasigap-ci-secret \
+pnpm exec vitest run tests/integration/s3-storage.test.ts
 pnpm build
 pnpm test:e2e
+git diff --check
 ```
 
-Expected: every command exits 0. Confirm `git diff --check` is clean.
+The real MinIO container/bucket must be started first using the exact existing CI commands. Expected: every command exits 0.
 
-- [ ] **Step 9: Review migration compatibility and production security boundaries**
-
-Before PR, inspect all migrations added by this branch (normally none). Verify:
-
-- no destructive migration was introduced;
-- deploy/rollback never emits secret contents;
-- `ssh-keyscan`, `StrictHostKeyChecking=no`, `git pull`, and server-side repository checkout are absent;
-- rollback never invokes `prisma migrate`;
-- candidate validation precedes `current` mutation;
-- failed post-switch health returns non-zero even when automatic rollback succeeds;
-- external health checks require the exact release SHA.
-
-Run:
+- [ ] **Step 8: Final security/migration review**
 
 ```bash
-grep -R "ssh-keyscan\|StrictHostKeyChecking=no\|git pull" .github/workflows ops && exit 1 || true
-grep -R "prisma migrate" ops/release/rollback-release.sh && exit 1 || true
-git diff --check
+if grep -R "ssh-keyscan\|StrictHostKeyChecking=no\|git pull" .github/workflows ops; then exit 1; fi
+if grep -n "prisma migrate\|pnpm install" ops/release/rollback-release.sh; then exit 1; fi
+git diff main...HEAD -- prisma/migrations
 git status --short
 ```
 
-- [ ] **Step 10: Commit final rollback/release gate work**
+Expected: forbidden deployment patterns absent. If a migration appears in this branch, verify it is additive/backward-compatible with the immediately previous application release before PR.
+
+- [ ] **Step 9: Commit final release gate**
 
 ```bash
-git add ops/release/rollback-release.sh ops/release/cleanup-releases.sh .github/workflows/rollback-production-release.yml tests/ops .github/workflows/ci.yml .env.example docs/release/mvp-checklist.md package.json
+git add ops/release/rollback-release.sh ops/release/cleanup-releases.sh ops/release/switch-release.sh .github/workflows/rollback-production-release.yml tests/ops .github/workflows/ci.yml .env.example docs/release/mvp-checklist.md package.json
 git commit -m "feat: add production rollback release gate"
 ```
 
-- [ ] **Step 11: Push and open PR with the project-required format**
+- [ ] **Step 10: Push, verify CI, and open PR**
 
-Push `dasigap/devops-production-release`, wait for branch CI, then create a PR into `main` titled:
+PR title:
 
 ```text
 feat : 운영 배포 및 롤백 파이프라인 구축
 ```
 
-Use exactly this body structure:
+PR body:
 
 ```markdown
 # ✨ PR 내용
@@ -1166,4 +961,4 @@ Use exactly this body structure:
 - main
 ```
 
-Do not merge until PR CI is successful and the final changed-file security review finds no Critical/Important blocker.
+Do not merge until PR CI succeeds and a final changed-file security review finds no Critical/Important blocker.
