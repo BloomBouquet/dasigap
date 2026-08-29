@@ -183,6 +183,86 @@
   overflow-wrap: anywhere;
 }
 
+.internal-app-shell {
+  padding-bottom: 0;
+}
+
+.validation-console {
+  display: grid;
+  gap: 18px;
+}
+
+.validation-header {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.validation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.validation-section {
+  display: grid;
+  gap: 10px;
+}
+
+.validation-section h2 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: -0.02em;
+}
+
+.validation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.validation-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.validation-label,
+.validation-value,
+.validation-detail {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.validation-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.validation-value {
+  margin-top: 8px;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+}
+
+.validation-detail {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
@@ -190,6 +270,12 @@ textarea:focus-visible,
 select:focus-visible {
   outline: 3px solid rgba(39, 92, 70, 0.38);
   outline-offset: 2px;
+}
+
+@media (max-width: 420px) {
+  .validation-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 360px) {

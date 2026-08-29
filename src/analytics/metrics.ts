@@ -48,7 +48,40 @@ function intersect<T>(values: Set<T>, cohort: Set<T>) {
   return new Set([...values].filter((value) => cohort.has(value)));
 }
 
-export function computeValidationMetrics(events: ValidationEvent[]) {
+function firstRegistrationDates(events: ValidationEvent[]) {
+  const datesByUser = new Map<string, string>();
+
+  for (const event of events) {
+    if (event.type !== "ITEM_REGISTRATION_COMPLETED") continue;
+
+    const dateKey = kstDateKey(event.createdAt);
+    const current = datesByUser.get(event.userId);
+    if (!current || dateKey < current) {
+      datesByUser.set(event.userId, dateKey);
+    }
+  }
+
+  return datesByUser;
+}
+
+function visitDates(events: ValidationEvent[]) {
+  const datesByUser = new Map<string, Set<string>>();
+
+  for (const event of events) {
+    if (event.type !== "APP_VISITED") continue;
+    const dates = datesByUser.get(event.userId) ?? new Set<string>();
+    dates.add(kstDateKey(event.createdAt));
+    datesByUser.set(event.userId, dates);
+  }
+
+  return datesByUser;
+}
+
+function hasVisitBetween(dates: Set<string>, start: string, end: string) {
+  return [...dates].some((date) => date >= start && date <= end);
+}
+
+export function computeValidationMetrics(events: ValidationEvent[], now: Date) {
   const registrationStartedUsers = uniqueUsers(events, "ITEM_REGISTRATION_STARTED");
   const registrationCompletedUsers = intersect(
     uniqueUsers(events, "ITEM_REGISTRATION_COMPLETED"),
@@ -60,20 +93,31 @@ export function computeValidationMetrics(events: ValidationEvent[]) {
       : [],
   );
 
-  const visitDatesByUser = new Map<string, Set<string>>();
-  for (const event of events) {
-    if (event.type !== "APP_VISITED") continue;
-    const dates = visitDatesByUser.get(event.userId) ?? new Set<string>();
-    dates.add(kstDateKey(event.createdAt));
-    visitDatesByUser.set(event.userId, dates);
-  }
+  const observationDate = kstDateKey(now);
+  const registrationDatesByUser = firstRegistrationDates(events);
+  const visitDatesByUser = visitDates(events);
 
+  let d7EligibleUsers = 0;
   let d7Users = 0;
+  let d30EligibleUsers = 0;
   let d30Users = 0;
-  for (const dates of visitDatesByUser.values()) {
-    const first = [...dates].sort()[0];
-    if (dates.has(addCalendarDays(first, 7))) d7Users += 1;
-    if (dates.has(addCalendarDays(first, 30))) d30Users += 1;
+
+  for (const [userId, cohortDate] of registrationDatesByUser) {
+    const dates = visitDatesByUser.get(userId) ?? new Set<string>();
+    const d7Start = addCalendarDays(cohortDate, 6);
+    const d7End = addCalendarDays(cohortDate, 8);
+    const d30Start = addCalendarDays(cohortDate, 27);
+    const d30End = addCalendarDays(cohortDate, 33);
+
+    if (observationDate >= d7End) {
+      d7EligibleUsers += 1;
+      if (hasVisitBetween(dates, d7Start, d7End)) d7Users += 1;
+    }
+
+    if (observationDate >= d30End) {
+      d30EligibleUsers += 1;
+      if (hasVisitBetween(dates, d30Start, d30End)) d30Users += 1;
+    }
   }
 
   const resaleStartedItems = uniqueItems(events, "RESALE_STARTED");
@@ -98,11 +142,12 @@ export function computeValidationMetrics(events: ValidationEvent[]) {
       medianMs: median(registrationDurations),
     },
     retention: {
-      cohortUsers: visitDatesByUser.size,
+      d7EligibleUsers,
       d7Users,
-      d7Rate: rate(d7Users, visitDatesByUser.size),
+      d7Rate: rate(d7Users, d7EligibleUsers),
+      d30EligibleUsers,
       d30Users,
-      d30Rate: rate(d30Users, visitDatesByUser.size),
+      d30Rate: rate(d30Users, d30EligibleUsers),
     },
     resaleCompletion: {
       startedItems: resaleStartedItems.size,
@@ -144,5 +189,5 @@ export async function getValidationMetrics(now = new Date()) {
     orderBy: { createdAt: "asc" },
   });
 
-  return computeValidationMetrics(events);
+  return computeValidationMetrics(events, now);
 }

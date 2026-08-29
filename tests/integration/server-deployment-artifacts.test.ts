@@ -19,6 +19,12 @@ describe("server deployment artifacts", () => {
     expect(compose).not.toMatch(/(?:^|\s)-\s*["']?3000:3000/);
   });
 
+  it("documents the validation admin allowlist in the production env template", () => {
+    const env = read("deploy/.env.production.example");
+
+    expect(env).toContain("VALIDATION_ADMIN_USER_IDS=");
+  });
+
   it("publishes an immutable Prisma migration image alongside the app image", () => {
     const dockerfile = read("Dockerfile");
     const workflow = read(".github/workflows/production-image.yml");
