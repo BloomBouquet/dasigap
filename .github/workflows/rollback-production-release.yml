@@ -1,0 +1,90 @@
+name: Rollback production release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Installed release commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dasigap-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+      PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+      PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+      PRODUCTION_KNOWN_HOSTS: ${{ secrets.PRODUCTION_KNOWN_HOSTS }}
+      PRODUCTION_BASE_URL: ${{ secrets.PRODUCTION_BASE_URL }}
+      PRODUCTION_SSH_PORT: ${{ secrets.PRODUCTION_SSH_PORT }}
+      TARGET_SHA: ${{ inputs.target_sha }}
+
+    steps:
+      - name: Validate rollback inputs
+        id: connection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "rollback target must be a full lowercase commit SHA" >&2
+            exit 64
+          }
+          [[ -n "$PRODUCTION_HOST" && -n "$PRODUCTION_USER" && -n "$PRODUCTION_SSH_KEY" && -n "$PRODUCTION_KNOWN_HOSTS" ]] || {
+            echo "production SSH configuration is incomplete" >&2
+            exit 66
+          }
+          node -e 'const u=new URL(process.env.PRODUCTION_BASE_URL); if(u.protocol!=="https:"||u.username||u.password||u.hash) process.exit(64)'
+          port="${PRODUCTION_SSH_PORT:-22}"
+          [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )) || {
+            echo "production SSH port is invalid" >&2
+            exit 64
+          }
+          echo "port=$port" >> "$GITHUB_OUTPUT"
+
+      - name: Configure pinned SSH trust
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$PRODUCTION_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          printf '%s\n' "$PRODUCTION_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Roll back to installed release
+        shell: bash
+        env:
+          SSH_PORT: ${{ steps.connection.outputs.port }}
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" "$PRODUCTION_USER@$PRODUCTION_HOST" \
+            bash -s -- "$TARGET_SHA" "$PRODUCTION_BASE_URL" <<'REMOTE'
+          set -Eeuo pipefail
+          sha="${1:-}"
+          production_base_url="${2:-}"
+          root="/home/ubuntu/dasigap"
+          target="$root/releases/$sha"
+
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 64
+          node -e 'const u=new URL(process.argv[1]); if(u.protocol!=="https:"||u.username||u.password||u.hash) process.exit(64)' "$production_base_url"
+          [[ -d "$target" ]] || {
+            echo "rollback target is not installed" >&2
+            exit 66
+          }
+          node -e '
+            const fs=require("node:fs");
+            const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+            if(m.service!=="dasigap"||m.commitSha!==process.argv[2]||!/^[0-9a-f]{40}$/.test(m.commitSha)) process.exit(65);
+          ' "$target/release-metadata.json" "$sha"
+          bash "$target/ops/release/rollback-release.sh" "$sha" "$production_base_url"
+          REMOTE
